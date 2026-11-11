@@ -8,3 +8,7 @@ replica-download-2.txt
 Photo.jpg
 
 config/*.backup.json
+frontend/node_modules/
+frontend/dist/
+frontend/.env.local
+frontend/.env.*.local

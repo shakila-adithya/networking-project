@@ -19,8 +19,8 @@ import java.util.function.Consumer;
 
 public final class HeartbeatManager implements AutoCloseable {
     public static final Duration DEFAULT_INTERVAL = Duration.ofSeconds(2);
-    public static final int DEFAULT_CONNECT_TIMEOUT_MILLIS = 1_000;
-    public static final int DEFAULT_FAILURE_THRESHOLD = 3;
+    public static final int DEFAULT_CONNECT_TIMEOUT_MILLIS = 5_000;
+    public static final int DEFAULT_FAILURE_THRESHOLD = 5;
 
     private final String localPeerName;
     private final Duration interval;

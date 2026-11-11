@@ -9,7 +9,7 @@ import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 
 public final class Protocol {
-    public static final long MAX_FILE_SIZE = 100L * 1024 * 1024;
+   public static final long MAX_FILE_SIZE = 2L * 1024 * 1024 * 1024;
     public static final int MAX_METADATA_SIZE = 64 * 1024;
     public static final int MAX_INVENTORY_ENTRIES = 10_000;
     public static final int MAX_INVENTORY_SIZE = 4 * 1024 * 1024;

@@ -118,6 +118,8 @@ public final class PeerServer implements AutoCloseable {
                 handlePut(request, input, output, "REPLICA_PUT", false);
             } else if (request.startsWith("GET ")) {
                 handleGet(request, output);
+            } else if (request.startsWith("DELETE ")) {
+                handleDelete(request, output);
             } else {
                 Protocol.writeLine(output, "ERROR unsupported request");
             }
@@ -210,6 +212,28 @@ public final class PeerServer implements AutoCloseable {
                 Protocol.copyExactly(fileInput, output, stored.metadata().size(), null);
             }
             output.flush();
+        } catch (Protocol.ProtocolException e) {
+            sendError(output, e.code(), e.getMessage());
+        } catch (FileStore.StorageException e) {
+            sendError(output, e.code(), e.getMessage());
+        }
+    }
+
+    private void handleDelete(String request, OutputStream output) throws IOException {
+        try {
+            String[] parts = request.split(" ", -1);
+            if (parts.length != 2) {
+                throw new Protocol.ProtocolException("INVALID_DELETE", "expected DELETE <file-id>");
+            }
+            UUID fileId;
+            try {
+                fileId = UUID.fromString(parts[1]);
+            } catch (IllegalArgumentException e) {
+                throw new Protocol.ProtocolException("INVALID_FILE_ID", "file ID must be a UUID");
+            }
+            fileStore.open(fileId);
+            fileStore.delete(fileId);
+            Protocol.writeLine(output, "OK DELETED " + fileId);
         } catch (Protocol.ProtocolException e) {
             sendError(output, e.code(), e.getMessage());
         } catch (FileStore.StorageException e) {

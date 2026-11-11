@@ -43,6 +43,7 @@ public final class PeerNode {
         String name = configuration.localPeerId();
         PeerRegistry registry = new PeerRegistry(name, configuration.peerEndpoints());
         ReplicationManager replicationManager = new ReplicationManager(name, registry::endpoints);
+        int restPort = Integer.getInteger("rest.port", configuration.port() + RestApiServer.DEFAULT_PORT_OFFSET);
         try (PeerServer server = new PeerServer(configuration.bindAddress(), configuration.port(),
              configuration.storagePath(), replicationManager);
              HeartbeatManager heartbeatManager = new HeartbeatManager(name, registry.endpoints());
@@ -50,6 +51,9 @@ public final class PeerNode {
                      name, server.fileStore(), replicationManager, heartbeatManager);
              ReconciliationManager reconciliationManager = new ReconciliationManager(
                      name, server.fileStore(), replicationManager, heartbeatManager, selfHealingManager);
+             RestApiServer restApi = new RestApiServer(configuration.bindAddress(), restPort, name,
+                     configuration.advertisedAddress(), configuration.port(), server.fileStore(), heartbeatManager,
+                     replicationManager);
              DiscoveryManager discoveryManager = configuration.discoveryEnabled()
                      ? new DiscoveryManager(configuration, registry,
                      endpoint -> heartbeatManager.refreshPeers(registry.endpoints())) : null;
@@ -61,12 +65,14 @@ public final class PeerNode {
                             PeerRegistry.PeerState.valueOf(transition.currentState().name())));
             server.start();
             heartbeatManager.start();
+            restApi.start();
             selfHealingManager.start();
             reconciliationManager.start();
             if (discoveryManager != null) discoveryManager.start();
             System.out.printf("Peer %s listening on %s:%d (advertised as %s:%d)%n",
                     name, configuration.bindAddress(), configuration.port(),
                     configuration.advertisedAddress(), configuration.port());
+            System.out.println("REST API: http://127.0.0.1:" + restPort + "/api");
             System.out.println("Storage: " + server.storageDirectory());
             System.out.println("Commands: " + COMMANDS);
 

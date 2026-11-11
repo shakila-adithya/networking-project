@@ -49,6 +49,20 @@ public final class PeerClient {
         }
     }
 
+    static void delete(String host, int port, UUID fileId) throws IOException {
+        try (Socket socket = connect(host, port);
+             InputStream input = new BufferedInputStream(socket.getInputStream());
+             OutputStream output = new BufferedOutputStream(socket.getOutputStream())) {
+            Protocol.writeLine(output, "DELETE " + fileId);
+            String response = Protocol.readLine(input);
+            TransferResult rejected = parseError(response, fileId);
+            if (rejected != null) throw new IOException(rejected.code() + ": " + rejected.message());
+            if (!("OK DELETED " + fileId).equals(response)) {
+                throw new IOException("unexpected delete response: " + response);
+            }
+        }
+    }
+
     static boolean verifyFile(String host, int port, FileMetadata expected) throws IOException {
         try (Socket socket = connect(host, port);
              InputStream input = new BufferedInputStream(socket.getInputStream());

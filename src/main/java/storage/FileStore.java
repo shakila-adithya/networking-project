@@ -154,6 +154,12 @@ public final class FileStore {
                 && expected.sha256().equals(HashUtils.sha256(stored.contentPath()));
     }
 
+    /** Deletes a complete local file pair. Missing files are treated as already deleted. */
+    public void delete(UUID fileId) throws IOException {
+        Files.deleteIfExists(contentPath(fileId));
+        Files.deleteIfExists(metadataPath(fileId));
+    }
+
     private Path contentPath(UUID fileId) {
         return filesDirectory.resolve(fileId + ".bin");
     }
