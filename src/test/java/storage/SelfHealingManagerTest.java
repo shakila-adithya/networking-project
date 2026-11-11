@@ -90,6 +90,47 @@ class SelfHealingManagerTest {
         }
     }
 
+    @Test
+    void repeatedSinglePeerDeferralIsLoggedOnceAndRepairResumesAfterJoin() throws Exception {
+        int portA = freePort(), portB = freePort();
+        Path storeA = temporaryDirectory.resolve("bootstrap-A");
+        Path storeB = temporaryDirectory.resolve("bootstrap-B");
+        Path source = temporaryDirectory.resolve("bootstrap.bin");
+        Files.write(source, new byte[] {9, 8, 7});
+        PeerRegistry registry = new PeerRegistry("B", List.of(endpoint("B", portB)));
+        ReplicationManager replication = new ReplicationManager("B", registry::endpoints);
+        try (PeerServer serverB = new PeerServer("127.0.0.1", portB, storeB, replication);
+             HeartbeatManager heartbeat = new HeartbeatManager("B", registry.endpoints());
+             SelfHealingManager healing = new SelfHealingManager("B", new FileStore(storeB),
+                     replication, heartbeat, Duration.ofHours(1), 1, Duration.ofMillis(10));
+             PeerServer serverA = new PeerServer("127.0.0.1", portA, storeA)) {
+            serverB.start();
+            UUID id = UUID.randomUUID();
+            assertTrue(PeerClient.upload("127.0.0.1", portB, source, id).success());
+            healing.checkNow();
+            healing.checkNow();
+            long deferred = healing.status().recentOutcomes().stream()
+                    .filter(outcome -> id.equals(outcome.fileId()) && "DEFERRED".equals(outcome.state())).count();
+            assertEquals(1, deferred);
+
+            serverA.start();
+            registry.join(endpoint("A", portA));
+            heartbeat.refreshPeers(registry.endpoints());
+            heartbeat.checkNow();
+            healing.checkNow();
+            await(() -> {
+                try {
+                    return PeerClient.listFiles("127.0.0.1", portA).stream()
+                            .anyMatch(metadata -> metadata.fileId().equals(id));
+                } catch (IOException e) {
+                    return false;
+                }
+            });
+            assertTrue(healing.status().recentOutcomes().stream()
+                    .anyMatch(outcome -> id.equals(outcome.fileId()) && "SUCCEEDED".equals(outcome.state())));
+        }
+    }
+
     private static ReplicationManager.PeerEndpoint endpoint(String name, int port) {
         return new ReplicationManager.PeerEndpoint(name, "127.0.0.1", port);
     }

@@ -34,6 +34,7 @@ public final class SelfHealingManager implements AutoCloseable {
     private final Set<UUID> activeRepairs = ConcurrentHashMap.newKeySet();
     private final Map<UUID, RepairView> views = new ConcurrentHashMap<>();
     private final List<RepairOutcome> outcomes = new java.util.concurrent.CopyOnWriteArrayList<>();
+    private final Map<UUID, String> lastLoggedSignatures = new ConcurrentHashMap<>();
     private final AtomicBoolean closed = new AtomicBoolean();
 
     public SelfHealingManager(String localPeerName, FileStore fileStore,
@@ -204,6 +205,18 @@ public final class SelfHealingManager implements AutoCloseable {
     }
 
     private void logOutcome(UUID fileId, String state, String message) {
+        if (fileId != null) {
+            AtomicBoolean changed = new AtomicBoolean();
+            lastLoggedSignatures.compute(fileId, (ignored, previous) -> {
+                String signature = state + "|" + message;
+                if (!signature.equals(previous)) {
+                    changed.set(true);
+                    return signature;
+                }
+                return previous;
+            });
+            if (!changed.get()) return;
+        }
         RepairOutcome outcome = new RepairOutcome(fileId, state, message, Instant.now());
         outcomes.add(outcome);
         while (outcomes.size() > 100) outcomes.remove(0);
