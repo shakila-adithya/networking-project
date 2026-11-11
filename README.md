@@ -448,7 +448,7 @@ It displays each UUID's state, preferred replicas, extra cleanup candidates, met
 
 ## Phase 6B automatic discovery and dynamic membership
 
-Discovery is optional and disabled by default. A discovery-enabled configuration sets `clusterId`, `discoveryEnabled`, a multicast `discoveryGroup`/`discoveryPort`, and a shared `discoverySecret`. The example files `config\discovery-lan-A.json` and `config\discovery-lan-B.json` start with only A and B listed; a third or later peer can use the same cluster ID and secret and announce its identity without being manually added to every existing peer's JSON file.
+Discovery is optional and disabled by default. A discovery-enabled configuration sets `clusterId`, `discoveryEnabled`, a multicast `discoveryGroup`/`discoveryPort`, and a shared `discoverySecret`. The example files `config\discovery-lan-A.json` and `config\discovery-lan-B.json` each start with only their local peer listed; they can discover each other and later peers without manually adding every address to every JSON file. Static configurations still require at least two peers.
 
 Each JOIN is a bounded JSON multicast datagram containing the peer ID, advertised address, TCP port, cluster ID, timestamp, nonce, and an HMAC-SHA-256 signature. A JOIN is accepted only when the cluster ID, signature, timestamp window, endpoint, and peer identity are valid. Secrets are never printed or included in status output. Messages are limited to 4 KiB, timestamps must be within 30 seconds, and each source/peer identity is rate-limited to 30 messages per minute. Keep the shared secret out of source control and protect the configuration file with normal Windows file permissions; the example secret must be replaced before real use.
 

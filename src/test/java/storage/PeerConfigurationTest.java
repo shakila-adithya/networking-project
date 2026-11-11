@@ -85,4 +85,16 @@ class PeerConfigurationTest {
                 """);
         assertThrows(Exception.class, () -> PeerConfiguration.load(config));
     }
+
+    @Test
+    void discoveryModeAllowsSinglePeerButStaticModeStillRequiresTwo() {
+        List<PeerConfiguration.PeerDefinition> onlyA = List.of(
+                new PeerConfiguration.PeerDefinition("A", "192.168.80.10", 6700));
+        PeerConfiguration discovery = new PeerConfiguration("A", "0.0.0.0", "192.168.80.10", 6700,
+                "data/A", onlyA, "cluster", true, "239.255.42.99", 45555,
+                "0123456789abcdef");
+        assertEquals(1, discovery.peerEndpoints().size());
+        assertThrows(IllegalArgumentException.class, () -> new PeerConfiguration("A", "0.0.0.0",
+                "192.168.80.10", 6700, "data/A", onlyA));
+    }
 }

@@ -6,3 +6,5 @@ downloaded-sample.txt
 replica-download.txt
 replica-download-2.txt
 Photo.jpg
+
+config/*.backup.json

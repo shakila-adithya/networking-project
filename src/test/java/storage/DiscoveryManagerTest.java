@@ -93,6 +93,24 @@ class DiscoveryManagerTest {
         assertEquals("B", replication.replicaTarget().orElseThrow().name());
     }
 
+    @Test
+    void twoSinglePeerConfigsDiscoverEachOtherAndEnableReplication() throws Exception {
+        PeerConfiguration a = singlePeerConfig("A", "192.168.75.10", 6800);
+        PeerConfiguration b = singlePeerConfig("B", "192.168.75.11", 6801);
+        PeerRegistry registryA = new PeerRegistry("A", a.peerEndpoints());
+        ReplicationManager replicationA = new ReplicationManager("A", registryA::endpoints);
+        try (DiscoveryManager discoveryA = new DiscoveryManager(a, registryA,
+                endpoint -> { })) {
+            byte[] join = DiscoveryManager.encode(DiscoveryManager.createJoin(
+                    b, System.currentTimeMillis(), UUID.randomUUID().toString()));
+            assertTrue(discoveryA.acceptDatagram(join, InetAddress.getByName("192.168.75.11")));
+            assertEquals(2, registryA.members().size());
+            assertEquals("B", replicationA.replicaTarget().orElseThrow().name());
+            assertTrue(registryA.members().stream().anyMatch(member ->
+                    member.endpoint().name().equals("B") && !member.configured()));
+        }
+    }
+
     private static PeerConfiguration config(String id, String address, int port, String secret) {
         java.util.ArrayList<PeerConfiguration.PeerDefinition> peers = new java.util.ArrayList<>();
         if (id.equals("A")) {
@@ -107,5 +125,11 @@ class DiscoveryManagerTest {
         return new PeerConfiguration(id, "0.0.0.0", address, port,
                 Path.of("data", id).toString(), peers,
                 "test-cluster", true, "239.255.42.99", 45555, secret);
+    }
+
+    private static PeerConfiguration singlePeerConfig(String id, String address, int port) {
+        return new PeerConfiguration(id, "0.0.0.0", address, port, Path.of("data", id).toString(),
+                List.of(new PeerConfiguration.PeerDefinition(id, address, port)),
+                "single-peer-test", true, "239.255.42.99", 45555, "single-peer-shared-secret");
     }
 }

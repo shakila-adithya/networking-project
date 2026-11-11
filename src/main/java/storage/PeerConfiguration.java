@@ -56,7 +56,7 @@ public record PeerConfiguration(String localPeerId, String bindAddress,
             }
         }
         peers = List.copyOf(Objects.requireNonNull(peers, "peers"));
-        if (peers.size() < ReplicationManager.REPLICATION_FACTOR) {
+        if (!discoveryEnabled && peers.size() < ReplicationManager.REPLICATION_FACTOR) {
             throw new IllegalArgumentException("at least " + ReplicationManager.REPLICATION_FACTOR
                     + " peers are required for replication factor " + ReplicationManager.REPLICATION_FACTOR);
         }
