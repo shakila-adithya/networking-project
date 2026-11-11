@@ -13,6 +13,7 @@ import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.Executors;
+import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -142,7 +143,12 @@ public final class SelfHealingManager implements AutoCloseable {
             if (!localPeerName.equals(owner)) logOutcome(fileId, "DEFERRED", "owned by " + owner);
             return;
         }
-        executor.execute(() -> repair(fileId, canonical));
+        try {
+            executor.execute(() -> repair(fileId, canonical));
+        } catch (RejectedExecutionException e) {
+            activeRepairs.remove(fileId);
+            logOutcome(fileId, "CANCELLED", "repair executor rejected job: " + Protocol.safeMessage(e.getMessage()));
+        }
     }
 
     private void repair(UUID fileId, FileMetadata expected) {
@@ -195,8 +201,10 @@ public final class SelfHealingManager implements AutoCloseable {
                     logOutcome(fileId, "SUCCEEDED", "replica verified on " + destination.name());
                     return;
                 } catch (Exception e) {
-                    logOutcome(fileId, "FAILED", "attempt " + attempt + "/" + maxRetries + ": "
-                            + Protocol.safeMessage(e.getMessage()));
+                    String message = "attempt " + attempt + "/" + maxRetries + ": "
+                            + Protocol.safeMessage(e.getMessage());
+                    logOutcome(fileId, "FAILED", message);
+                    System.err.printf("Repair attempt failed: %s (%s)%n", fileId, message);
                     if (attempt < maxRetries) {
                         try { Thread.sleep(backoff.multipliedBy(1L << (attempt - 1)).toMillis()); }
                         catch (InterruptedException interrupted) { Thread.currentThread().interrupt(); return; }
@@ -257,6 +265,7 @@ public final class SelfHealingManager implements AutoCloseable {
             executor.shutdownNow();
             try { executor.awaitTermination(2, TimeUnit.SECONDS); }
             catch (InterruptedException e) { Thread.currentThread().interrupt(); }
+            activeRepairs.clear();
         }
     }
 

@@ -55,6 +55,7 @@ class SelfHealingManagerTest {
             assertEquals(HashUtils.sha256(source), a.sha256());
             assertTrue(healing.status().recentOutcomes().stream()
                     .anyMatch(outcome -> outcome.fileId().equals(id) && "SUCCEEDED".equals(outcome.state())));
+            assertTrue(healing.status().activeRepairs().isEmpty());
         }
     }
 
@@ -199,6 +200,7 @@ class SelfHealingManagerTest {
             assertTrue(healing.status().recentOutcomes().stream()
                     .anyMatch(outcome -> targetId.equals(outcome.fileId())
                             && "SUCCEEDED".equals(outcome.state())));
+            assertTrue(healing.status().activeRepairs().isEmpty());
         }
     }
 

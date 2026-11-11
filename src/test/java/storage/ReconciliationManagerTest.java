@@ -99,7 +99,7 @@ class ReconciliationManagerTest {
         List<ReplicationManager.PeerEndpoint> peers = List.of(endpoint("A", portA), endpoint("B", portB));
         java.util.concurrent.atomic.AtomicBoolean alive = new java.util.concurrent.atomic.AtomicBoolean(false);
         try (HeartbeatManager heartbeat = new HeartbeatManager("A", peers, Duration.ofHours(1),
-                     HeartbeatManager.DEFAULT_FAILURE_THRESHOLD, peer -> alive.get(), ignored -> { });
+                     3, peer -> alive.get(), ignored -> { });
              SelfHealingManager repair = new SelfHealingManager("A", new FileStore(temporaryDirectory.resolve("event")),
                      new ReplicationManager("A", peers), heartbeat, Duration.ofHours(1), 1, Duration.ofMillis(10));
              ReconciliationManager reconcile = new ReconciliationManager("A", new FileStore(temporaryDirectory.resolve("event")),

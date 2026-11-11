@@ -56,7 +56,7 @@ class HeartbeatManagerTest {
 
     @Test
     void thirdConsecutiveFailureMarksPeerDead() {
-        try (HeartbeatManager manager = manager(peer -> false, new ArrayList<>())) {
+        try (HeartbeatManager manager = manager(peer -> false, new ArrayList<>(), 3)) {
             manager.checkNow();
             manager.checkNow();
             manager.checkNow();
@@ -70,7 +70,7 @@ class HeartbeatManagerTest {
     void successfulHeartbeatRecoversDeadPeerToAlive() {
         AtomicBoolean reachable = new AtomicBoolean(false);
         List<String> stateChanges = new ArrayList<>();
-        try (HeartbeatManager manager = manager(peer -> reachable.get(), stateChanges)) {
+        try (HeartbeatManager manager = manager(peer -> reachable.get(), stateChanges, 3)) {
             manager.checkNow();
             manager.checkNow();
             manager.checkNow();
@@ -137,9 +137,14 @@ class HeartbeatManagerTest {
 
     private static HeartbeatManager manager(HeartbeatManager.HeartbeatProbe probe,
                                             List<String> stateChanges) {
+        return manager(probe, stateChanges, HeartbeatManager.DEFAULT_FAILURE_THRESHOLD);
+    }
+
+    private static HeartbeatManager manager(HeartbeatManager.HeartbeatProbe probe,
+                                            List<String> stateChanges, int failureThreshold) {
         return new HeartbeatManager(
                 "A", twoPeers(), Duration.ofHours(1),
-                HeartbeatManager.DEFAULT_FAILURE_THRESHOLD,
+                failureThreshold,
                 probe, stateChanges::add);
     }
 

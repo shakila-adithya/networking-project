@@ -14,12 +14,24 @@ import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
 import java.security.MessageDigest;
 import java.time.Instant;
+import java.util.concurrent.ScheduledFuture;
+import java.util.concurrent.ScheduledThreadPoolExecutor;
+import java.util.concurrent.TimeUnit;
 import java.util.UUID;
 import java.util.List;
 
 public final class PeerClient {
     private static final int CONNECT_TIMEOUT_MILLIS = 2_000;
     private static final int READ_TIMEOUT_MILLIS = 30_000;
+    private static final long CONTROL_OPERATION_TIMEOUT_MILLIS = 60_000L;
+    private static final long TRANSFER_BASE_TIMEOUT_MILLIS = 60_000L;
+    private static final long TRANSFER_MILLIS_PER_MB = 2_000L;
+    private static final ScheduledThreadPoolExecutor TIMEOUTS = new ScheduledThreadPoolExecutor(1,
+            runnable -> Thread.ofPlatform().daemon().name("peer-client-timeouts").unstarted(runnable));
+
+    static {
+        TIMEOUTS.setRemoveOnCancelPolicy(true);
+    }
 
     private PeerClient() {
     }
@@ -32,6 +44,7 @@ public final class PeerClient {
         try (Socket socket = connect(host, port);
              InputStream input = new BufferedInputStream(socket.getInputStream());
              OutputStream output = new BufferedOutputStream(socket.getOutputStream())) {
+            try (SocketDeadline ignored = SocketDeadline.after(CONTROL_OPERATION_TIMEOUT_MILLIS, socket)) {
             Protocol.writeLine(output, "LIST_FILES");
             String response = Protocol.readLine(input);
             if (response != null && response.startsWith("ERROR ")) {
@@ -45,6 +58,7 @@ public final class PeerClient {
                 return InventoryJson.decode(Protocol.readExactly(input, length));
             } catch (Protocol.ProtocolException e) {
                 throw new IOException(e.getMessage(), e);
+            }
             }
         }
     }
@@ -64,9 +78,15 @@ public final class PeerClient {
     }
 
     static boolean verifyFile(String host, int port, FileMetadata expected) throws IOException {
+        return verifyFile(host, port, expected, transferTimeoutMillis(expected.size()));
+    }
+
+    static boolean verifyFile(String host, int port, FileMetadata expected,
+                              long operationTimeoutMillis) throws IOException {
         try (Socket socket = connect(host, port);
              InputStream input = new BufferedInputStream(socket.getInputStream());
              OutputStream output = new BufferedOutputStream(socket.getOutputStream())) {
+            try (SocketDeadline ignored = SocketDeadline.after(operationTimeoutMillis, socket)) {
             Protocol.writeLine(output, "GET " + expected.fileId());
             String response = Protocol.readLine(input);
             TransferResult rejected = parseError(response, expected.fileId());
@@ -85,6 +105,7 @@ public final class PeerClient {
             MessageDigest digest = HashUtils.sha256Digest();
             Protocol.copyExactly(input, OutputStream.nullOutputStream(), expected.size(), digest);
             return expected.sha256().equals(HashUtils.toHex(digest.digest()));
+            }
         }
     }
 
@@ -137,6 +158,8 @@ public final class PeerClient {
              Socket destinationSocket = connect(destination.host(), destination.port());
              InputStream destinationInput = new BufferedInputStream(destinationSocket.getInputStream());
              OutputStream destinationOutput = new BufferedOutputStream(destinationSocket.getOutputStream())) {
+            try (SocketDeadline ignored = SocketDeadline.after(transferTimeoutMillis(expected.size()),
+                    sourceSocket, destinationSocket)) {
             OutputStream sourceOutput = new BufferedOutputStream(sourceSocket.getOutputStream());
             Protocol.writeLine(sourceOutput, "GET " + expected.fileId());
             String sourceResponse = Protocol.readLine(sourceInput);
@@ -189,6 +212,41 @@ public final class PeerClient {
                 return TransferResult.success("replica stored successfully", expected.fileId());
             }
             throw new IOException("unexpected replica response: " + response);
+            }
+        }
+    }
+
+    private static long transferTimeoutMillis(long bytes) {
+        long megabytes = Math.max(1L, (bytes + (1024L * 1024L) - 1L) / (1024L * 1024L));
+        try {
+            return Math.addExact(TRANSFER_BASE_TIMEOUT_MILLIS,
+                    Math.multiplyExact(megabytes, TRANSFER_MILLIS_PER_MB));
+        } catch (ArithmeticException e) {
+            return Long.MAX_VALUE;
+        }
+    }
+
+    /** Closes sockets at the operation deadline; this also unblocks a read that is receiving trickle data. */
+    private static final class SocketDeadline implements AutoCloseable {
+        private final ScheduledFuture<?> task;
+
+        private SocketDeadline(ScheduledFuture<?> task) {
+            this.task = task;
+        }
+
+        static SocketDeadline after(long timeoutMillis, Socket... sockets) {
+            if (timeoutMillis < 1) throw new IllegalArgumentException("operation timeout must be positive");
+            Socket[] captured = sockets.clone();
+            ScheduledFuture<?> task = TIMEOUTS.schedule(() -> {
+                for (Socket socket : captured) {
+                    try { socket.close(); } catch (IOException ignored) { }
+                }
+            }, timeoutMillis, TimeUnit.MILLISECONDS);
+            return new SocketDeadline(task);
+        }
+
+        @Override public void close() {
+            task.cancel(false);
         }
     }
 
