@@ -152,7 +152,9 @@ public final class PeerServer implements AutoCloseable {
             }
             int metadataLength = parseMetadataLength(parts[1]);
             FileMetadata metadata = MetadataJson.decode(Protocol.readExactly(input, metadataLength));
-            session = fileStore.reserveUpload(metadata);
+            session = "REPLICA_PUT".equals(expectedCommand)
+                    ? fileStore.reserveReplicaUpload(metadata)
+                    : fileStore.reserveUpload(metadata);
             Protocol.writeLine(output, "READY");
             session.receive(input);
             session.close();

@@ -95,9 +95,27 @@ public final class SelfHealingManager implements AutoCloseable {
             }
         }
         Map<UUID, Map<String, FileMetadata>> files = new LinkedHashMap<>();
-        inventories.forEach((peer, list) -> list.forEach(metadata ->
-                files.computeIfAbsent(metadata.fileId(), ignored -> new LinkedHashMap<>()).put(peer, metadata)));
+        inventories.forEach((peer, list) -> list.forEach(metadata -> {
+            // Inventory proves that the metadata and file size are structurally usable;
+            // placement decisions additionally require content-integrity verification.
+            if (contentVerified(peer, metadata)) {
+                files.computeIfAbsent(metadata.fileId(), ignored -> new LinkedHashMap<>())
+                        .put(peer, metadata);
+            }
+        }));
         return new Snapshot(inventories, files);
+    }
+
+    private boolean contentVerified(String peerName, FileMetadata metadata) {
+        try {
+            if (localPeerName.equals(peerName)) {
+                return fileStore.verify(metadata.fileId(), metadata);
+            }
+            ReplicationManager.PeerEndpoint peer = endpointFor(peerName);
+            return PeerClient.verifyFile(peer.host(), peer.port(), metadata);
+        } catch (Exception e) {
+            return false;
+        }
     }
 
     private void inspect(UUID fileId, Map<String, FileMetadata> copies, Snapshot snapshot) {
