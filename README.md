@@ -478,6 +478,3 @@ discovery-status
 5. Start a third laptop with a new peer ID, its own advertised IP/port, the same cluster ID/secret, and an initial `peers` list containing at least itself and one existing peer. Its JOIN should appear in `peers` on authenticated cluster members. Upload a file and verify the existing replication, inventory, repair, and reconciliation behavior.
 
 Discovery can fail on Wi-Fi networks that block multicast, isolate wireless clients, filter UDP, or use captive portals/VLANs. In those environments use the Phase 6A static JSON configuration. Phase 6B does not implement unicast seed fallback, automatic secret rotation, TLS, file-access authorization, or dynamic cluster removal; those remain future work.
-#   n e t w o r k i n g - p r o j e c t  
- #   n e t w o r k i n g - p r o j e c t  
- 
