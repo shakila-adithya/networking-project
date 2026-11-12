@@ -1,7 +1,0 @@
-.file-actions { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
-.download-button { color: var(--blue); font-size: 11px; text-decoration: none; }
-.download-button:hover { text-decoration: underline; }
-.download-button:focus-visible { outline: 2px solid var(--blue); outline-offset: 3px; }
-.table-card:has(.file-actions) .table-head,
-.table-card:has(.file-actions) .table-row { grid-template-columns: minmax(140px,1.5fr) 65px 140px minmax(245px,1.5fr) 100px 100px; min-width: 950px; }
-.uuid-cell code { user-select: text; }

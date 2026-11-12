@@ -18,6 +18,17 @@ public final class PeerNode {
     }
 
     public static void main(String[] args) throws IOException {
+        if (args.length == 1 && args[0].equals("--setup")) {
+            SetupAgent agent = new SetupAgent(Integer.getInteger("setup.port", 6080),
+                    new SetupConfigStore(Path.of("config", "local-setup.json")), Path.of("frontend", "dist"));
+            Runtime.getRuntime().addShutdownHook(new Thread(agent::close));
+            agent.start();
+            System.out.println("Open http://localhost:" + agent.port() + " and choose Settings → Join existing cluster.");
+            System.out.println("Keep this agent running. Press Ctrl+C to stop it.");
+            try { new java.util.concurrent.CountDownLatch(1).await(); }
+            catch (InterruptedException e) { Thread.currentThread().interrupt(); agent.close(); }
+            return;
+        }
         PeerConfiguration configuration;
         try {
             if (args.length == 1) {

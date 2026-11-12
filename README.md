@@ -1,5 +1,7 @@
 # Self-Healing Distributed Storage System
 
+For UI-based onboarding of a third laptop, see [Join device C through Settings](docs/join-device-C.md). Start the setup agent with `PeerNode --setup`; it serves the UI before a cluster configuration exists and persists settings separately from existing JSON configurations.
+
 Phase 6A adds validated external peer configuration for localhost and private LAN deployments. Phase 6B adds authenticated, optional LAN multicast discovery and dynamic membership. The JavaFX GUI remains deferred to later phases.
 
 ## Requirements

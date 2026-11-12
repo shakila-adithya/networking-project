@@ -33,6 +33,7 @@ public final class RestApiServer implements AutoCloseable {
     private final int peerPort;
     private final HeartbeatManager heartbeatManager;
     private final ReplicationManager replicationManager;
+    private final java.util.concurrent.ExecutorService executor = Executors.newVirtualThreadPerTaskExecutor();
 
     public RestApiServer(String bindAddress, int port, String localPeerId,
                          String advertisedAddress, int peerPort,
@@ -48,7 +49,7 @@ public final class RestApiServer implements AutoCloseable {
         server.createContext("/api/health", this::health);
         server.createContext("/api/dashboard", this::dashboard);
         server.createContext("/api/files", this::files);
-        server.setExecutor(Executors.newVirtualThreadPerTaskExecutor());
+        server.setExecutor(executor);
     }
 
     public void start() { server.start(); }
@@ -284,5 +285,5 @@ public final class RestApiServer implements AutoCloseable {
         sendJson(exchange, status, Map.of("error", code, "message", Protocol.safeMessage(message)));
     }
 
-    @Override public void close() { server.stop(0); }
+    @Override public void close() { server.stop(0); executor.shutdownNow(); }
 }

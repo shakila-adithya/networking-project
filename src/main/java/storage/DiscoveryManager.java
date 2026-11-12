@@ -42,6 +42,7 @@ public final class DiscoveryManager implements AutoCloseable {
     private final AtomicLong received = new AtomicLong();
     private final AtomicLong accepted = new AtomicLong();
     private final AtomicLong rejected = new AtomicLong();
+    private final AtomicLong identityConflicts = new AtomicLong();
     private volatile String lastRejectReason = "none";
     private volatile MulticastSocket socket;
     private volatile InetAddress multicastAddress;
@@ -61,8 +62,10 @@ public final class DiscoveryManager implements AutoCloseable {
     public synchronized void start() throws IOException {
         if (!running.compareAndSet(false, true)) return;
         try {
-            MulticastSocket created = new MulticastSocket(configuration.discoveryPort());
+            MulticastSocket created = new MulticastSocket(null);
+            socket = created;
             created.setReuseAddress(true);
+            created.bind(new InetSocketAddress(configuration.discoveryPort()));
             created.setSoTimeout(1_000);
             InetAddress group = InetAddress.getByName(configuration.discoveryGroup());
             NetworkInterface networkInterface = NetworkInterface.getByInetAddress(
@@ -136,6 +139,15 @@ public final class DiscoveryManager implements AutoCloseable {
         String rateKey = sourceAddress.getHostAddress() + "/" + (message.peerId() == null ? "?" : message.peerId());
         if (!allow(rateKey)) {
             reject("rate limit");
+            return false;
+        }
+        if (configuration.localPeerId().equals(message.peerId())
+                && configuration.clusterId().equals(message.clusterId())
+                && "JOIN".equals(message.type()) && validSignature(message)
+                && Math.abs(System.currentTimeMillis() - message.timestamp()) <= MAX_CLOCK_SKEW_MILLIS
+                && (!configuration.advertisedAddress().equals(message.address()) || configuration.port() != message.port())) {
+            identityConflicts.incrementAndGet();
+            reject("Peer ID already in use on another device; choose a unique peer ID in Settings");
             return false;
         }
         if (!"JOIN".equals(message.type()) || !configuration.clusterId().equals(message.clusterId())
@@ -212,10 +224,11 @@ public final class DiscoveryManager implements AutoCloseable {
 
     public DiscoveryStatus status() {
         return new DiscoveryStatus(running.get(), received.get(), accepted.get(), rejected.get(), lastRejectReason,
-                configuration.discoveryGroup(), configuration.discoveryPort());
+                configuration.discoveryGroup(), configuration.discoveryPort(), identityConflicts.get());
     }
 
     @Override public synchronized void close() {
+        announcer.shutdownNow();
         if (running.compareAndSet(true, false)) {
             announcer.shutdownNow();
             closeSocket();
@@ -239,6 +252,6 @@ public final class DiscoveryManager implements AutoCloseable {
     public record DiscoveryMessage(String type, String clusterId, String peerId, String address,
                                    int port, String nonce, long timestamp, String signature) { }
     public record DiscoveryStatus(boolean running, long received, long accepted, long rejected,
-                                  String lastRejectReason, String group, int port) { }
+                                  String lastRejectReason, String group, int port, long identityConflicts) { }
     private record RateWindow(long startedAt, long count) { }
 }
