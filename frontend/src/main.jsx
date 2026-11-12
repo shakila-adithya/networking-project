@@ -44,7 +44,7 @@ function App() {
   const notify = text => { setMessage(text); setTimeout(() => setMessage(''), 2800) }
   const localPeer = health?.peers?.find(peer => peer.source === 'local')
   const content = page === 'Dashboard' ? <Dashboard health={health} files={files} go={setPage}/>
-    : page === 'Files' ? <Files files={files} refresh={refresh} notify={notify}/>
+    : page === 'Files' ? <Files files={files} peers={health?.peers || []} refresh={refresh} notify={notify}/>
     : page === 'Peers' ? <Peers health={health}/>
     : page === 'Repairs' ? <Repairs files={files}/>
     : <Settings notify={notify}/>
@@ -149,7 +149,8 @@ function Status({ status }) {
   return <span className={`pill ${good ? 'good' : 'warn'}`}><i/>{status}</span>
 }
 
-function Files({ files, refresh, notify }) {
+function Files({ files, peers, refresh, notify }) {
+  const [recipient, setRecipient] = useState('all')
   const [query, setQuery] = useState('')
   const [selectedFile, setSelectedFile] = useState(null)
   const [pendingFiles, setPendingFiles] = useState([])
@@ -164,7 +165,7 @@ function Files({ files, refresh, notify }) {
       const update = changes => setUploads(current => current.map(item => item.id === id ? { ...item, ...changes } : item))
       setUploads(current => [...current, { id, name: file.name, total: file.size, loaded: 0, percent: 0, status: 'Uploading' }])
       const request = new XMLHttpRequest()
-      request.open('POST', `${API}/files`)
+      request.open('POST', `${API}/files?recipient=${encodeURIComponent(recipient)}`)
       request.setRequestHeader('X-File-Name', encodeURIComponent(file.name))
       request.upload.onprogress = progress => {
         const total = progress.lengthComputable ? progress.total : file.size
@@ -176,6 +177,17 @@ function Files({ files, refresh, notify }) {
         let result
         try { result = JSON.parse(request.responseText) } catch { result = {} }
         if (request.status >= 200 && request.status < 300) {
+          if (result.shareStatus) {
+            const failed = Object.entries(result.failedPeers || {}).map(([peer, reason]) => `${peer}: ${reason}`).join('; ')
+            if (result.shareStatus === 'INCOMPLETE') {
+              update({loaded:file.size, percent:100, status:'Share incomplete', detail:`Delivered to ${(result.deliveredTo || []).join(', ') || 'none'}. Failed: ${failed}`})
+            } else {
+              setUploads(current => current.filter(item => item.id !== id))
+            }
+            notify(`${file.name} shared with ${(result.deliveredTo || []).join(', ') || 'no peers'}${failed ? '; some deliveries failed' : ''}`)
+            await refresh()
+            return
+          }
           const warning = result.replicationStatus === 'REPLICATION_FAILED'
           if (warning) {
             update({ loaded: file.size, percent: 100, status: 'Stored with warning',
@@ -186,7 +198,8 @@ function Files({ files, refresh, notify }) {
           notify(warning ? `${file.name} stored; replication failed` : `${file.name} uploaded successfully`)
           await refresh()
         } else {
-          update({ status: 'Failed', detail: result.message || `Upload rejected (HTTP ${request.status}).` })
+          const deliveryErrors = Object.entries(result.failedPeers || {}).map(([peer, reason]) => `${peer}: ${reason}`).join('; ')
+          update({ status: 'Failed', detail: deliveryErrors || result.message || `Upload rejected (HTTP ${request.status}).` })
           notify(`Upload failed: ${result.message || request.status}`)
         }
       }
@@ -216,6 +229,10 @@ function Files({ files, refresh, notify }) {
   }
   return <section className="content">
     <Title title="Files" sub="Everything stored on this peer, read from the Java backend." action={<label className="btn primary"><Icon name="upload" size={16}/>Upload files<input type="file" multiple onChange={upload}/></label>}/>
+    <div className="share-recipient"><label htmlFor="share-recipient">Share with</label><select id="share-recipient" value={recipient} onChange={event => setRecipient(event.target.value)}>
+      <option value="all">All connected peers (including this device)</option>
+      {peers.map(peer => <option key={peer.peerId} value={peer.peerId}>Peer {peer.peerId}{peer.source === 'local' ? ' (this device)' : ''} — {peer.status}</option>)}
+    </select><p>Only selected recipients store this share. Single-peer shares have one copy and are not redistributed by repair. “All” uses the connected peers at upload time.</p></div>
     <div className={`dropzone ${dragging ? 'over' : ''}`} onDragOver={e => { e.preventDefault(); setDragging(true) }} onDragLeave={() => setDragging(false)} onDrop={drop}>
       <span className="drop-icon"><Icon name="upload" size={22}/></span>
       <div><b>Drop files here to upload</b><span>Each file is hashed and stored by the backend before it is confirmed.</span></div>
@@ -245,7 +262,7 @@ function Files({ files, refresh, notify }) {
       {!visible.length && <Empty icon="inbox" text={query ? 'No files match your search' : 'No files returned by the backend'} hint={query ? 'Try a different filename.' : 'Upload a file to get started.'}/>}
     </div>
     {selectedFile && <FileDetails file={selectedFile} onClose={() => setSelectedFile(null)}/>}
-    {pendingFiles.length > 0 && <UploadPreview files={pendingFiles} onCancel={() => setPendingFiles([])} onUpload={() => {
+    {pendingFiles.length > 0 && <UploadPreview files={pendingFiles} recipientLabel={recipient === 'all' ? 'All connected peers (including this device)' : `Peer ${recipient} only`} onCancel={() => setPendingFiles([])} onUpload={() => {
       startUploads(pendingFiles)
       setPendingFiles([])
     }}/>}
@@ -309,6 +326,7 @@ function FileDetails({ file, onClose }) {
       <dt>Upload date</dt><dd>{Number.isNaN(date.getTime()) ? file.createdAt : date.toLocaleString()}<small>{file.createdAt}</small></dd>
       <dt>Reported copies</dt><dd>{file.replicaCount ?? 'Unavailable'}</dd>
       <dt>Reported storage locations</dt><dd>{file.locations?.length ? file.locations.join(', ') : 'Unavailable'}</dd>
+      {file.recipients?.length > 0 && <><dt>Selected share recipients</dt><dd>{file.recipients.join(', ')}</dd></>}
     </dl>
     <p className="file-details-note">Copy count and locations reflect this API response; other peers may hold additional copies.</p>
     <a className="btn primary" href={`${API}/files/${encodeURIComponent(file.fileId)}/download`}><Icon name="download" size={16}/>Download file</a>
@@ -318,7 +336,7 @@ function FileDetails({ file, onClose }) {
 function UploadProgress({ uploads }) {
   if (!uploads.length) return null
   return <div className="upload-progress-list" aria-label="File uploads">{uploads.map(item =>
-    <div className={`upload-progress-item ${item.status === 'Failed' ? 'failed' : item.status === 'Stored with warning' ? 'warned' : ''}`} key={item.id}>
+    <div className={`upload-progress-item ${item.status === 'Failed' ? 'failed' : ['Stored with warning', 'Share incomplete'].includes(item.status) ? 'warned' : ''}`} key={item.id}>
       <div className="upload-progress-heading"><b>{item.name}</b><span>{item.status} {item.status === 'Uploading' && `${item.percent}%`}</span></div>
       <progress value={item.percent} max="100" aria-label={`Upload progress for ${item.name}`}/>
       <small role="status">{item.status === 'Processing' ? '100% sent · Waiting for backend verification and replication…' : item.detail || `${formatBytes(item.loaded)} of ${formatBytes(item.total)} sent`}</small>

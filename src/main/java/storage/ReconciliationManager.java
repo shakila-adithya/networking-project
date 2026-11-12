@@ -149,6 +149,14 @@ public final class ReconciliationManager implements AutoCloseable {
             FileMetadata metadata = copies.values().iterator().next();
             List<String> verified = copies.keySet().stream().sorted()
                     .filter(peer -> verify(peer, metadata)).toList();
+            if (metadata.recipients() != null) {
+                boolean complete = verified.containsAll(metadata.recipients());
+                var view = new ReconciliationView(fileId, complete ? "SHARE_COMPLETE" : "SHARE_INCOMPLETE",
+                        metadata.recipients(), List.of(), List.of(), unavailable(initialSnapshot), Instant.now());
+                record(fileId, view);
+                outcome(fileId, view.state(), "Explicit recipients; no automatic redistribution", signature(view));
+                return;
+            }
             if (verified.size() < ReplicationManager.REPLICATION_FACTOR) {
                 ReconciliationView view = new ReconciliationView(fileId, "DEFERRED", verified, List.of(),
                         List.of(), unavailable(initialSnapshot), Instant.now());

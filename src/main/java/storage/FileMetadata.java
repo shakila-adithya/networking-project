@@ -7,7 +7,12 @@ import java.util.Objects;
 import java.util.UUID;
 import java.util.regex.Pattern;
 
-public record FileMetadata(UUID fileId, String fileName, long size, String sha256, String createdAt) {
+public record FileMetadata(UUID fileId, String fileName, long size, String sha256, String createdAt,
+        @com.fasterxml.jackson.annotation.JsonInclude(com.fasterxml.jackson.annotation.JsonInclude.Include.NON_NULL)
+        java.util.List<String> recipients) {
+    public FileMetadata(UUID fileId, String fileName, long size, String sha256, String createdAt) {
+        this(fileId, fileName, size, sha256, createdAt, null);
+    }
     private static final Pattern SHA_256 = Pattern.compile("[0-9a-fA-F]{64}");
     private static final Pattern UNSAFE_FILE_CHARACTERS = Pattern.compile("[<>:\"/\\\\|?*\\p{Cntrl}]");
 
@@ -30,6 +35,14 @@ public record FileMetadata(UUID fileId, String fileName, long size, String sha25
             throw new IllegalArgumentException("createdAt must be an ISO-8601 instant", e);
         }
         sha256 = sha256.toLowerCase(Locale.ROOT);
+        if (recipients != null) {
+            if (recipients.isEmpty() || recipients.size() > 1000
+                    || recipients.stream().anyMatch(id -> id == null || !id.matches("[A-Za-z0-9_-]{1,40}"))
+                    || new java.util.HashSet<>(recipients).size() != recipients.size()) {
+                throw new IllegalArgumentException("invalid recipient list");
+            }
+            recipients = recipients.stream().sorted().toList();
+        }
     }
 
     public static void validateFileName(String fileName) {

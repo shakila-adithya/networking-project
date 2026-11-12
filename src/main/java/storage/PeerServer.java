@@ -154,6 +154,10 @@ public final class PeerServer implements AutoCloseable {
             }
             int metadataLength = parseMetadataLength(parts[1]);
             FileMetadata metadata = MetadataJson.decode(Protocol.readExactly(input, metadataLength));
+            if (metadata.recipients() != null && (replicationManager == null
+                    || !metadata.recipients().contains(replicationManager.localPeerName()))) {
+                throw new Protocol.ProtocolException("NOT_A_RECIPIENT", "This peer is not a selected recipient");
+            }
             session = "REPLICA_PUT".equals(expectedCommand)
                     ? fileStore.reserveReplicaUpload(metadata)
                     : fileStore.reserveUpload(metadata);
@@ -163,7 +167,7 @@ public final class PeerServer implements AutoCloseable {
             session = null;
 
             ReplicationManager.ReplicationResult replication = null;
-            if (replicate && replicationManager != null) {
+            if (replicate && replicationManager != null && metadata.recipients() == null) {
                 try {
                     replication = replicationManager.replicate(fileStore.open(metadata.fileId()));
                 } catch (FileStore.StorageException | IOException e) {

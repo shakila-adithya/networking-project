@@ -121,6 +121,8 @@ public final class SelfHealingManager implements AutoCloseable {
 
     private void inspect(UUID fileId, Map<String, FileMetadata> copies, Snapshot snapshot) {
         FileMetadata canonical = copies.values().iterator().next();
+        // Explicit shares have fixed recipients and must never be repaired onto other peers.
+        if (canonical.recipients() != null) { views.remove(fileId); return; }
         if (copies.values().stream().anyMatch(metadata -> !canonical.equals(metadata))) {
             defer(fileId, "conflicting metadata");
             return;

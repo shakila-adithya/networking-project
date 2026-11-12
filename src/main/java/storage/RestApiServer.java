@@ -115,6 +115,7 @@ public final class RestApiServer implements AutoCloseable {
                 item.put("sha256", metadata.sha256());
                 item.put("replicaCount", 1);
                 item.put("locations", List.of(localPeerId));
+                item.put("recipients", metadata.recipients() == null ? List.of() : metadata.recipients());
                 result.add(item);
             }
             sendJson(exchange, 200, Map.of("files", result));
@@ -201,6 +202,24 @@ public final class RestApiServer implements AutoCloseable {
     }
 
     private void upload(HttpExchange exchange) throws IOException {
+        String recipient = exchange.getRequestURI().getRawQuery();
+        if (recipient != null) {
+            if (!recipient.startsWith("recipient=") || recipient.contains("&")) {
+                sendError(exchange, 400, "INVALID_RECIPIENT", "Choose a peer or all connected peers"); return;
+            }
+            try { recipient = URLDecoder.decode(recipient.substring(10), StandardCharsets.UTF_8); }
+            catch (IllegalArgumentException e) { sendError(exchange, 400, "INVALID_RECIPIENT", "Invalid recipient"); return; }
+        }
+        List<ReplicationManager.PeerEndpoint> destinations = null;
+        if (recipient != null) {
+            final String selected = recipient;
+            List<ReplicationManager.PeerEndpoint> known = replicationManager == null ? List.of() : replicationManager.peers();
+            destinations = known.stream().filter(p -> selected.equals("all")
+                    ? p.name().equals(localPeerId) || (heartbeatManager != null && heartbeatManager.statuses().stream()
+                        .anyMatch(h -> h.peer().name().equals(p.name()) && h.state() == HeartbeatManager.PeerState.ALIVE))
+                    : p.name().equals(selected)).toList();
+            if (destinations.isEmpty()) { sendError(exchange, 400, "INVALID_RECIPIENT", "Selected peer is not registered. Refresh the peer list."); return; }
+        }
         String encodedName = exchange.getRequestHeaders().getFirst("X-File-Name");
         if (encodedName == null || encodedName.isBlank()) {
             sendError(exchange, 400, "INVALID_FILE_NAME", "X-File-Name is required");
@@ -223,7 +242,30 @@ public final class RestApiServer implements AutoCloseable {
                 }
             }
             FileMetadata metadata = new FileMetadata(UUID.randomUUID(), fileName, size,
-                    HashUtils.sha256(temporary), Instant.now().toString());
+                    HashUtils.sha256(temporary), Instant.now().toString(), destinations == null ? null
+                            : destinations.stream().map(ReplicationManager.PeerEndpoint::name).toList());
+            if (destinations != null) {
+                List<String> delivered = new ArrayList<>();
+                Map<String, String> failed = new LinkedHashMap<>();
+                for (var target : destinations) {
+                    try {
+                        if (target.name().equals(localPeerId)) {
+                            try (var session = fileStore.reserveUpload(metadata); var input = Files.newInputStream(temporary)) {
+                                session.receive(input);
+                            }
+                        } else {
+                            var transfer = PeerClient.uploadReplica(target.host(), target.port(), metadata, temporary);
+                            if (!transfer.success()) throw new IOException(transfer.code() + ": " + transfer.message());
+                        }
+                        delivered.add(target.name());
+                    } catch (IOException | FileStore.StorageException e) { failed.put(target.name(), Protocol.safeMessage(e.getMessage())); }
+                }
+                sendJson(exchange, delivered.isEmpty() ? 502 : failed.isEmpty() ? 201 : 207,
+                        Map.of("fileId", metadata.fileId(), "deliveredTo", delivered, "failedPeers", failed,
+                                "shareStatus", failed.isEmpty() ? "COMPLETE" : "INCOMPLETE",
+                                "message", delivered.isEmpty() ? "No recipient accepted this file. Ensure all devices run the updated application." : "Share processed"));
+                return;
+            }
             try (FileStore.UploadSession session = fileStore.reserveUpload(metadata);
                  InputStream input = Files.newInputStream(temporary)) {
                 session.receive(input);
