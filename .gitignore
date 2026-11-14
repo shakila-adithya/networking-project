@@ -7,12 +7,20 @@ replica-download.txt
 replica-download-2.txt
 Photo.jpg
 
-config/*.backup.json
+backend/config/*.backup.json
 frontend/node_modules/
 frontend/dist/
 frontend/.env.local
 frontend/.env.*.local
-config/local-setup.json
-config/.setup-*.tmp
+backend/config/local-setup.json
+backend/config/.setup-*.tmp
 *.zip
 frontend/.env*
+# Next.js build artifacts
+frontend/.next/
+frontend/out/
+frontend/*.tsbuildinfo
+frontend/test-results/
+frontend/playwright-report/
+backend/config/bluetooth-restore.properties
+backend/config/device-profile.json

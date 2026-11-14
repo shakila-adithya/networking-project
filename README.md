@@ -1,23 +1,36 @@
 # Self-Healing Distributed Storage System
 
+The frontend is now **Relay**, built with Next.js App Router, React 19, and TypeScript from the supplied design export. Open Network map, Messages, or Share files; use **Settings** in the footer for cluster setup. The default **Design preview** reproduces the supplied sample activity. Select **Use live network** to connect the interface to the Java API. See [frontend guide](frontend/README.md) for architecture, tests, and preview limitations.
+
+## Project layout
+
+```
+backend/    Java 25 mesh node (Maven): src/, pom.xml, mvnw, config/, storage-data/
+frontend/   Next.js UI (built to frontend/dist and served by the backend)
+docs/       architecture, routing, topology, feature guides
+scripts/    run.sh launcher (builds both, starts the backend)
+```
+
+Run **Maven and Java commands from `backend/`** (`cd backend`): `config/` and `storage-data/` below are relative to it, and the backend serves the built UI from `../frontend/dist` (override with `-Dui.dir=<path>`). The launcher does this for you.
+
 ## Quick start on Linux/macOS
 
 Use JDK 25 and Node.js 24 (`nvm install` reads `.nvmrc`). The Java version is also recorded in `.java-version`.
 
 ```bash
-./run.sh
+./scripts/run.sh
 ```
 
 This installs the locked frontend dependencies, builds the UI, runs the Java tests, and starts the setup agent. Open **http://localhost:6080** and use **Settings** to configure or join a cluster. Keep the terminal running; press Ctrl+C to stop.
 
-For subsequent launches without rebuilding, use `./run.sh --no-build`. To use a different UI port, run `./run.sh --no-build -Dsetup.port=6085`.
+For subsequent launches without rebuilding, use `./scripts/run.sh --no-build`. To use a different UI port, run `./scripts/run.sh --no-build -Dsetup.port=6085`.
 
-If a saved configuration refers to an old Wi-Fi address, open Settings, refresh the detected networks, choose the current address, apply, and restart the node. Existing files in `storage-data/` and saved settings in `config/local-setup.json` are preserved by the launcher. A second running peer is required for replication; a single peer can serve the UI but cannot provide redundant storage.
+If a saved configuration refers to an old Wi-Fi address, open Settings, refresh the detected networks, choose the current address, apply, and restart the node. Existing files in `backend/storage-data/` and saved settings in `backend/config/local-setup.json` are preserved by the launcher. A second running peer is required for replication; a single peer can serve the UI but cannot provide redundant storage.
 
 To build and test without starting the app:
 
 ```bash
-./mvnw clean verify
+(cd backend && ./mvnw clean verify)
 npm --prefix frontend ci
 npm --prefix frontend run build
 ```
@@ -27,6 +40,15 @@ Multicast integration tests skip when the host does not support multicast on loo
 For UI-based onboarding of a third laptop, see [Join device C through Settings](docs/join-device-C.md). Start the setup agent with `PeerNode --setup`; it serves the UI before a cluster configuration exists and persists settings separately from existing JSON configurations.
 
 Phase 6A adds validated external peer configuration for localhost and private LAN deployments. Phase 6B adds authenticated, optional LAN multicast discovery and dynamic membership. The JavaFX GUI remains deferred to later phases.
+
+## Bluetooth and file sharing over the mesh
+
+* **Bluetooth is on by default** (falls back to TCP if unavailable) and your device stays **hidden until you make it visible**: set your name on **My device**, then on the **Network map** select your own device to switch visibility, and use **Nearby devices** to scan and connect. Real Bluetooth (Linux/BlueZ): the device advertises itself, finds other Relay devices and connects to them. Details, hardware requirements, what changes on your adapter (and is restored), and how to test with two devices: [docs/bluetooth.md](docs/bluetooth.md).
+* Files can be sent to devices that are only reachable through the mesh, with live progress, automatic re-routing and **resume**: [docs/file-transfer.md](docs/file-transfer.md).
+
+## Stopping the app
+
+Press **Ctrl+C** in the terminal running `scripts/run.sh` (or close the terminal; for a CLI node type `quit`). The JVM shuts the node down, releases every port and exits: this is covered by `ShutdownTest`, which starts the real app in a separate JVM and checks it exits and frees its ports. If a process survives an abnormal exit (crashed terminal, `kill -9` of the launcher), run `./scripts/stop.sh` to stop it gracefully (`--force` to kill).
 
 ## Requirements
 
@@ -64,19 +86,19 @@ Open three terminals at the project root and leave all three processes running.
 Terminal 1 - Peer A:
 
 ```powershell
-.\mvnw.cmd exec:java '-Dexec.mainClass=storage.PeerNode' '-Dexec.args=A 127.0.0.1 5000'
+.\mvnw.cmd exec:java '-Dexec.mainClass=storage.app.PeerNode' '-Dexec.args=A 127.0.0.1 5000'
 ```
 
 Terminal 2 - Peer B:
 
 ```powershell
-.\mvnw.cmd exec:java '-Dexec.mainClass=storage.PeerNode' '-Dexec.args=B 127.0.0.1 5001'
+.\mvnw.cmd exec:java '-Dexec.mainClass=storage.app.PeerNode' '-Dexec.args=B 127.0.0.1 5001'
 ```
 
 Terminal 3 - Peer C:
 
 ```powershell
-.\mvnw.cmd exec:java '-Dexec.mainClass=storage.PeerNode' '-Dexec.args=C 127.0.0.1 5002'
+.\mvnw.cmd exec:java '-Dexec.mainClass=storage.app.PeerNode' '-Dexec.args=C 127.0.0.1 5002'
 ```
 
 Each peer owns an independent directory:
@@ -100,7 +122,7 @@ tmp/
 The preferred startup form is:
 
 ```powershell
-.\mvnw.cmd exec:java '-Dexec.mainClass=storage.PeerNode' '-Dexec.args=config\localhost-A.json'
+.\mvnw.cmd exec:java '-Dexec.mainClass=storage.app.PeerNode' '-Dexec.args=config\examples\localhost-A.json'
 ```
 
 `PeerNode <config.json>` loads these fields:
@@ -120,26 +142,26 @@ The preferred startup form is:
 }
 ```
 
-`bindAddress` controls the local listening interface. `0.0.0.0` listens on all local interfaces, while `advertisedAddress` is the address other peers use and must be a real reachable host/IP, never `0.0.0.0` or `::`. Do not guess the advertised address: inspect the laptop's Wi-Fi adapter with `ipconfig` and choose its private IPv4 address. Every peer must use the same peer list, with its own local ID, advertised address, port, and storage directory changed as appropriate. The supplied `config\localhost-A.json` preserves the three-peer localhost layout; copy it for B and C and update the local fields.
+`bindAddress` controls the local listening interface. `0.0.0.0` listens on all local interfaces, while `advertisedAddress` is the address other peers use and must be a real reachable host/IP, never `0.0.0.0` or `::`. Do not guess the advertised address: inspect the laptop's Wi-Fi adapter with `ipconfig` and choose its private IPv4 address. Every peer must use the same peer list, with its own local ID, advertised address, port, and storage directory changed as appropriate. The supplied `config\examples\localhost-A.json` preserves the three-peer localhost layout; copy it for B and C and update the local fields.
 
 The legacy form remains supported for the original localhost setup:
 
 ```powershell
-.\mvnw.cmd exec:java '-Dexec.mainClass=storage.PeerNode' '-Dexec.args=A 127.0.0.1 5000'
+.\mvnw.cmd exec:java '-Dexec.mainClass=storage.app.PeerNode' '-Dexec.args=A 127.0.0.1 5000'
 ```
 
 Configuration validation rejects duplicate peer IDs, duplicate address/port endpoints, invalid ports, missing local peer entries, local endpoint mismatches, wildcard advertised addresses, unknown JSON fields, and configurations with fewer than two peers. The configured peer endpoints are shared by replication, heartbeat, inventory, self-healing, and reconciliation; replication factor remains 2.
 
 ### Two-laptop LAN example
 
-The files `config\lan-laptop-A.json` and `config\lan-laptop-B.json` illustrate two LAN peers. Replace `192.168.1.10` and `192.168.1.11` with the actual private Wi-Fi IPv4 addresses, and add a third peer entry if using the existing A/B/C topology. Start each laptop with its local configuration:
+The files `config\examples\lan-laptop-A.json` and `config\examples\lan-laptop-B.json` illustrate two LAN peers. Replace `192.168.1.10` and `192.168.1.11` with the actual private Wi-Fi IPv4 addresses, and add a third peer entry if using the existing A/B/C topology. Start each laptop with its local configuration:
 
 ```powershell
-.\mvnw.cmd exec:java '-Dexec.mainClass=storage.PeerNode' '-Dexec.args=config\lan-laptop-A.json'
+.\mvnw.cmd exec:java '-Dexec.mainClass=storage.app.PeerNode' '-Dexec.args=config\examples\lan-laptop-A.json'
 ```
 
 ```powershell
-.\mvnw.cmd exec:java '-Dexec.mainClass=storage.PeerNode' '-Dexec.args=config\lan-laptop-B.json'
+.\mvnw.cmd exec:java '-Dexec.mainClass=storage.app.PeerNode' '-Dexec.args=config\examples\lan-laptop-B.json'
 ```
 
 Run these commands only on a trusted private LAN. The application does not perform discovery or authentication and should not be exposed to the public Internet.
@@ -475,7 +497,7 @@ It displays each UUID's state, preferred replicas, extra cleanup candidates, met
 
 ## Phase 6B automatic discovery and dynamic membership
 
-Discovery is optional and disabled by default. A discovery-enabled configuration sets `clusterId`, `discoveryEnabled`, a multicast `discoveryGroup`/`discoveryPort`, and a shared `discoverySecret`. The example files `config\discovery-lan-A.json` and `config\discovery-lan-B.json` each start with only their local peer listed; they can discover each other and later peers without manually adding every address to every JSON file. Static configurations still require at least two peers.
+Discovery is optional and disabled by default. A discovery-enabled configuration sets `clusterId`, `discoveryEnabled`, a multicast `discoveryGroup`/`discoveryPort`, and a shared `discoverySecret`. The example files `config\examples\discovery-lan-A.json` and `config\examples\discovery-lan-B.json` each start with only their local peer listed; they can discover each other and later peers without manually adding every address to every JSON file. Static configurations still require at least two peers.
 
 Each JOIN is a bounded JSON multicast datagram containing the peer ID, advertised address, TCP port, cluster ID, timestamp, nonce, and an HMAC-SHA-256 signature. A JOIN is accepted only when the cluster ID, signature, timestamp window, endpoint, and peer identity are valid. Secrets are never printed or included in status output. Messages are limited to 4 KiB, timestamps must be within 30 seconds, and each source/peer identity is rate-limited to 30 messages per minute. Keep the shared secret out of source control and protect the configuration file with normal Windows file permissions; the example secret must be replaced before real use.
 
@@ -494,11 +516,11 @@ discovery-status
 
 1. On each laptop, run `ipconfig` and record the private Wi-Fi IPv4 address. Set the local `advertisedAddress` and peer TCP port in its discovery configuration. Use the same `clusterId`, `discoveryGroup`, `discoveryPort`, and random secret in both files.
 2. Allow the TCP port only from the trusted private subnet, as described in the Phase 6A firewall section. Also allow the discovery UDP port from that subnet if Windows Firewall blocks multicast. Do not disable Windows Firewall or use a public-interface rule.
-3. Start A with `config\discovery-lan-A.json` and B with `config\discovery-lan-B.json`:
+3. Start A with `config\examples\discovery-lan-A.json` and B with `config\examples\discovery-lan-B.json`:
 
 ```powershell
-.\mvnw.cmd exec:java '-Dexec.mainClass=storage.PeerNode' '-Dexec.args=config\discovery-lan-A.json'
-.\mvnw.cmd exec:java '-Dexec.mainClass=storage.PeerNode' '-Dexec.args=config\discovery-lan-B.json'
+.\mvnw.cmd exec:java '-Dexec.mainClass=storage.app.PeerNode' '-Dexec.args=config\examples\discovery-lan-A.json'
+.\mvnw.cmd exec:java '-Dexec.mainClass=storage.app.PeerNode' '-Dexec.args=config\examples\discovery-lan-B.json'
 ```
 
 4. Run `discovery-status` and `peers` on both laptops. Each should show discovery running and the authenticated peer in the registry. Use `Test-NetConnection <other-private-ip> -Port <tcp-port>` to verify TCP reachability.

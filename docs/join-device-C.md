@@ -3,7 +3,7 @@
 ## Prerequisites
 
 - Devices A and B are already running with discovery enabled. They must share the exact cluster ID, discovery secret, multicast group and UDP port. Static-only peers cannot discover C; keep static startup supported, but enable discovery on A and B before using this join flow.
-- Device C has the updated source, JDK 21+, and Node/npm for the one-time UI build. Run commands from the project root. Do not copy another laptop's `config/local-setup.json` or storage directory.
+- Device C has the updated source, JDK 21+, and Node/npm for the one-time UI build. Run the Maven commands from the `backend` folder (`cd backend`) and the npm commands from the project root. Do not copy another laptop's `backend/config/local-setup.json` or storage directory.
 - All devices are on a trusted private Wi-Fi/Ethernet LAN, can communicate directly, and have synchronized clocks (discovery accepts approximately 30 seconds of clock skew).
 - C needs a unique peer ID. Use `C` only if no existing device already uses it. Choose an ID not present in A/B's `peers` output.
 - Obtain the existing cluster ID and shared secret from the operator of A/B. Secrets are not retrievable through the setup API. Do not paste secrets into commands, screenshots or source control.
@@ -14,11 +14,11 @@ In PowerShell at the project root:
 
 ```powershell
 cd frontend
-npm install
+npm ci
 npm run build
 cd ..
 .\mvnw.cmd compile
-.\mvnw.cmd exec:java '-Dexec.mainClass=storage.PeerNode' '-Dexec.args=--setup'
+.\mvnw.cmd exec:java '-Dexec.mainClass=storage.app.PeerNode' '-Dexec.args=--setup'
 ```
 
 Open **http://localhost:6080** on C. Keep this terminal running. No existing peer configuration or `ipconfig` output is needed. Stop an older Java peer on C first; A and B can continue running normally. The setup agent remains running even before C has joined or if C's node fails to start.
@@ -26,7 +26,7 @@ Open **http://localhost:6080** on C. Keep this terminal running. No existing pee
 If 6080 is occupied, use a different setup port:
 
 ```powershell
-.\mvnw.cmd exec:java '-Dexec.mainClass=storage.PeerNode' '-Dexec.args=--setup' '-Dsetup.port=6085'
+.\mvnw.cmd exec:java '-Dexec.mainClass=storage.app.PeerNode' '-Dexec.args=--setup' '-Dsetup.port=6085'
 ```
 
 Then open **http://localhost:6085**. A setup-agent bind failure is a terminal startup error; choose another setup port and start again.
@@ -39,7 +39,7 @@ Then open **http://localhost:6085**. A setup-agent bind failure is a terminal st
 4. Keep the suggested free **peer TCP port** and **internal REST port**, or enter alternatives. Ports are revalidated on Validate and Apply. They must differ and cannot equal the setup port. A port can be taken by another process between validation and restart; restart errors remain visible in Settings.
 5. Match A/B's **discovery multicast group** and **UDP port** (defaults `239.255.42.99` and `45555`).
 6. Select **Validate settings**. This checks local settings and port availability; it does not authenticate against A/B or prove multicast connectivity. It saves nothing.
-7. Select **Apply configuration**. This explicitly writes C's settings to `config/local-setup.json`. Existing `discovery-lan-*.json` and static configuration files are untouched. If validation or persistence fails, the previous managed configuration remains intact.
+7. Select **Apply configuration**. This explicitly writes C's settings to `backend/config/local-setup.json`. Existing `discovery-lan-*.json` and static configuration files are untouched. If validation or persistence fails, the previous managed configuration remains intact.
 8. Finish any transfers on C, then select **Restart local node with saved configuration**. This restarts C's TCP server, internal REST server, discovery, heartbeat, repair and reconciliation services. The UI host remains available. It is a node restart, not an in-place change to an active peer identity; active transfers may be interrupted.
 9. Watch **STARTING → DISCOVERING → CONNECTED**. Allow at least 15 seconds. **CONNECTED** requires at least one remote peer with a successful heartbeat. Confirm both A and B appear with `ALIVE` and verified heartbeats. A peer ID collision is shown as **PEER ID CONFLICT**; select a different ID and apply/restart.
 10. On A/B, run the existing CLI `peers` and `status` commands to confirm C's identity and TCP endpoint. Upload a small file and verify a second copy and matching hash before trying large files.
@@ -63,7 +63,7 @@ If no peers appear, check matching cluster ID/secret/group/UDP port, device cloc
 
 ## Frontend development
 
-The built UI at port 6080 is the recommended setup route. For Vite development, run `npm run dev` in `frontend` while the setup agent runs. The Vite `/api` proxy targets the local agent at 6080. Change the proxy target in `frontend/vite.config.js` if using another setup port. For legacy direct REST use, set `VITE_API_BASE_URL` explicitly to the target REST address; setup is available only through the setup agent. Remove any stale localhost override from `.env.local` to use the agent's same-origin default. Restart Vite after changing environment variables.
+The built UI at port 6080 is the recommended setup route. Open Settings from the Relay footer. For Next.js development, run `npm run dev` in `frontend` while the setup agent runs. The development `/api` proxy targets port 6080; change its destination in `frontend/next.config.mjs` if using another agent port. Production assets are a static export served by Java. `NEXT_PUBLIC_API_BASE_URL` can override the legacy setup client API origin at build time; the Relay live screens use the same-origin `/api` endpoints. Remove stale Vite environment overrides.
 
 ## Verification
 
