@@ -1,6 +1,7 @@
 package storage.web;
 
-import storage.cluster.ReplicationManager;
+import storage.cluster.PeerEndpoint;
+import storage.cluster.PeerRegistry;
 import storage.files.FileMetadata;
 import storage.files.FileStore;
 import storage.files.HashUtils;
@@ -39,13 +40,15 @@ public final class RestApiServer implements AutoCloseable {
     private static final long MAX_UPLOAD_SIZE = Protocol.MAX_FILE_SIZE;
     private static final ObjectMapper JSON = new ObjectMapper();
 
+    private storage.security.MeshSecurity security;
+    public void attachSecurity(storage.security.MeshSecurity security) { this.security = security; }
     private final HttpServer server;
     private final FileStore fileStore;
     private final String localPeerId;
     private final String advertisedAddress;
     private final int peerPort;
     private final HeartbeatManager heartbeatManager;
-    private final ReplicationManager replicationManager;
+    private final PeerRegistry registry;
     private volatile MeshNode mesh;
     private volatile ChatService chat;
     private volatile String meshTransport = "none";
@@ -58,14 +61,14 @@ public final class RestApiServer implements AutoCloseable {
     public RestApiServer(String bindAddress, int port, String localPeerId,
                          String advertisedAddress, int peerPort,
                          FileStore fileStore, HeartbeatManager heartbeatManager,
-                         ReplicationManager replicationManager) throws IOException {
+                         PeerRegistry registry) throws IOException {
         this.server = HttpServer.create(new InetSocketAddress(bindAddress, port), 0);
         this.fileStore = fileStore;
         this.localPeerId = localPeerId;
         this.advertisedAddress = advertisedAddress;
         this.peerPort = peerPort;
         this.heartbeatManager = heartbeatManager;
-        this.replicationManager = replicationManager;
+        this.registry = registry;
         server.createContext("/api/health", this::health);
         server.createContext("/api/dashboard", this::dashboard);
         server.createContext("/api/files", this::files);
@@ -99,6 +102,9 @@ public final class RestApiServer implements AutoCloseable {
     }
 
     private void deviceApiHandler(HttpExchange exchange) throws IOException {
+        if (!LocalUserGuard.allowed(exchange)) {
+            sendError(exchange, 403, "LOCAL_ONLY", "Open Relay on this laptop using localhost."); return;
+        }
         addCors(exchange);
         String method = exchange.getRequestMethod();
         if ("OPTIONS".equalsIgnoreCase(method)) {
@@ -156,6 +162,9 @@ public final class RestApiServer implements AutoCloseable {
     }
 
     private void meshApi(HttpExchange exchange) throws IOException {
+        if (!LocalUserGuard.allowed(exchange)) {
+            sendError(exchange, 403, "LOCAL_ONLY", "Open Relay on this laptop using localhost."); return;
+        }
         addCors(exchange);
         String method = exchange.getRequestMethod();
         if ("OPTIONS".equalsIgnoreCase(method)) {
@@ -177,6 +186,7 @@ public final class RestApiServer implements AutoCloseable {
                 body.put("deviceName", node.displayName().isEmpty() ? node.localId() : node.displayName());
                 body.put("names", node.names());
                 body.put("links", node.neighbourKinds());
+                body.put("linkAddresses", node.neighbourAddresses());
                 body.put("transport", meshTransport);
                 body.put("neighbours", new java.util.TreeSet<>(node.neighbourIds()));
                 body.put("routes", meshRoutes.get());
@@ -199,7 +209,8 @@ public final class RestApiServer implements AutoCloseable {
                 sendJson(exchange, 200, Map.of("chatId", id, "status", service.status(id)));
             } else if (path.equals("/api/mesh/transfers") && "GET".equalsIgnoreCase(method)) {
                 MeshFileService files = meshFiles;
-                sendJson(exchange, 200, Map.of("transfers", files == null ? List.of() : files.transfers()));
+                sendJson(exchange, 200, Map.of("transfers", files == null ? List.of() : files.transfers(),
+                        "incoming", files == null ? List.of() : files.incomingTransfers()));
             } else if (path.startsWith("/api/mesh/transfers/") && meshFiles != null) {
                 String rest = path.substring("/api/mesh/transfers/".length());
                 boolean resume = rest.endsWith("/resume");
@@ -230,7 +241,12 @@ public final class RestApiServer implements AutoCloseable {
                 if (request.get("deviceId") instanceof String deviceId && api != null) {
                     // A device found by a scan or by LAN discovery: its address is looked up on our side.
                     try {
-                        api.connectDevice(deviceId);
+                        Object selectedAddress = request.get("candidateAddress");
+                        if (selectedAddress != null && !(selectedAddress instanceof String)) {
+                            sendError(exchange, 400, "INVALID_ADDRESS", "candidateAddress must be text");
+                            return;
+                        }
+                        api.connectDevice(deviceId, (String) selectedAddress);
                     } catch (IOException e) {
                         sendError(exchange, 502, "CONNECT_FAILED", e.getMessage());
                         return;
@@ -277,6 +293,9 @@ public final class RestApiServer implements AutoCloseable {
     }
 
     private void dashboard(HttpExchange exchange) throws IOException {
+        if (!LocalUserGuard.allowed(exchange)) {
+            sendError(exchange, 403, "LOCAL_ONLY", "Open Relay on this laptop using localhost."); return;
+        }
         if (!allow(exchange, "GET")) return;
         List<FileMetadata> inventory = fileStore.inventory();
         long usedBytes = 0;
@@ -296,6 +315,9 @@ public final class RestApiServer implements AutoCloseable {
     }
 
     private void files(HttpExchange exchange) throws IOException {
+        if (!LocalUserGuard.allowed(exchange)) {
+            sendError(exchange, 403, "LOCAL_ONLY", "Open Relay on this laptop using localhost."); return;
+        }
         if ("OPTIONS".equalsIgnoreCase(exchange.getRequestMethod())) {
             addCors(exchange);
             exchange.sendResponseHeaders(204, -1);
@@ -316,7 +338,6 @@ public final class RestApiServer implements AutoCloseable {
                 item.put("size", metadata.size());
                 item.put("createdAt", metadata.createdAt());
                 item.put("sha256", metadata.sha256());
-                item.put("replicaCount", 1);
                 item.put("locations", List.of(localPeerId));
                 item.put("recipients", metadata.recipients() == null ? List.of() : metadata.recipients());
                 result.add(item);
@@ -387,12 +408,6 @@ public final class RestApiServer implements AutoCloseable {
             sendError(exchange, 400, "INVALID_FILE_ID", "file ID must be a UUID");
             return;
         }
-        List<String> failedPeers = new ArrayList<>();
-        for (ReplicationManager.PeerEndpoint peer : replicationManager.peers()) {
-            if (peer.name().equals(localPeerId)) continue;
-            try { PeerClient.delete(peer.host(), peer.port(), fileId); }
-            catch (IOException e) { failedPeers.add(peer.name()); }
-        }
         try {
             fileStore.open(fileId);
             fileStore.delete(fileId);
@@ -400,8 +415,7 @@ public final class RestApiServer implements AutoCloseable {
             sendError(exchange, 404, e.code(), e.getMessage());
             return;
         }
-        sendJson(exchange, failedPeers.isEmpty() ? 200 : 207,
-                Map.of("fileId", fileId, "deleted", true, "failedPeers", failedPeers));
+        sendJson(exchange, 200, Map.of("fileId", fileId, "deleted", true));
     }
 
     private void upload(HttpExchange exchange) throws IOException {
@@ -413,11 +427,11 @@ public final class RestApiServer implements AutoCloseable {
             try { recipient = URLDecoder.decode(recipient.substring(10), StandardCharsets.UTF_8); }
             catch (IllegalArgumentException e) { sendError(exchange, 400, "INVALID_RECIPIENT", "Invalid recipient"); return; }
         }
-        List<ReplicationManager.PeerEndpoint> destinations = null;
+        List<PeerEndpoint> destinations = null;
         List<String> meshTargets = new ArrayList<>();
         if (recipient != null) {
             final String selected = recipient;
-            List<ReplicationManager.PeerEndpoint> known = replicationManager == null ? List.of() : replicationManager.peers();
+            List<PeerEndpoint> known = registry == null ? List.of() : registry.endpoints();
             destinations = known.stream().filter(p -> selected.equals("all")
                     ? p.name().equals(localPeerId) || (heartbeatManager != null && heartbeatManager.statuses().stream()
                         .anyMatch(h -> h.peer().name().equals(p.name()) && h.state() == HeartbeatManager.PeerState.ALIVE))
@@ -466,7 +480,8 @@ public final class RestApiServer implements AutoCloseable {
                             }
                         } else {
                             try {
-                                var transfer = PeerClient.uploadReplica(target.host(), target.port(), metadata, temporary);
+                                var transfer = security == null ? PeerClient.deliver(target.host(), target.port(), metadata, temporary)
+                                        : PeerClient.authenticated(security, () -> PeerClient.deliver(target.host(), target.port(), metadata, temporary));
                                 if (!transfer.success()) throw new IOException(transfer.code() + ": " + transfer.message());
                             } catch (IOException direct) {
                                 // The direct TCP path failed: route the file over the mesh instead, if possible.
@@ -499,14 +514,8 @@ public final class RestApiServer implements AutoCloseable {
                  InputStream input = Files.newInputStream(temporary)) {
                 session.receive(input);
             }
-            ReplicationManager.ReplicationResult replication = replicationManager == null
-                    ? ReplicationManager.ReplicationResult.failure("NO_REPLICA_TARGET", "replication is not configured", null)
-                    : replicationManager.replicate(fileStore.open(metadata.fileId()));
             sendJson(exchange, 201, Map.of("fileId", metadata.fileId(), "fileName", metadata.fileName(),
-                    "size", metadata.size(), "sha256", metadata.sha256(),
-                    "replicaCount", replication.success() ? 2 : 1,
-                    "replicationStatus", replication.success() ? "HEALTHY"
-                            : "ROUTED_IN_PROGRESS".equals(replication.code()) ? "ROUTED_IN_PROGRESS" : "REPLICATION_FAILED"));
+                    "size", metadata.size(), "sha256", metadata.sha256()));
         } catch (IllegalArgumentException e) {
             sendError(exchange, 400, "INVALID_FILE_NAME", e.getMessage());
         } catch (FileStore.StorageException e) {
@@ -554,7 +563,7 @@ public final class RestApiServer implements AutoCloseable {
     }
 
     private static void addCors(HttpExchange exchange) {
-        exchange.getResponseHeaders().set("Access-Control-Allow-Origin", "*");
+        exchange.getResponseHeaders().set("Vary", "Origin");
         exchange.getResponseHeaders().set("Access-Control-Allow-Headers", "Content-Type, X-File-Name");
         exchange.getResponseHeaders().set("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS");
     }

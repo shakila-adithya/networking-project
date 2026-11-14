@@ -1,8 +1,8 @@
 "use client";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { MeshProvider, useMesh } from "@/lib/mesh";
-import { Icon, Avatar } from "./ui";
+import { MeshProvider, useMesh, transportLabel } from "@/lib/mesh";
+import { Icon } from "./ui";
 export function Shell({ children }: { children: React.ReactNode }) {
   return (
     <MeshProvider>
@@ -12,7 +12,7 @@ export function Shell({ children }: { children: React.ReactNode }) {
 }
 function Chrome({ children }: { children: React.ReactNode }) {
   const path = usePathname(),
-    { preview, setPreview, peers, deviceName, transport, error } = useMesh();
+    { preview, setPreview, peers, links, error } = useMesh();
   const nav = [
     [
       "/",
@@ -41,7 +41,7 @@ function Chrome({ children }: { children: React.ReactNode }) {
           ? "file-icon-2"
           : "file-icon",
     ],
-    ["/device/", "My device", path.startsWith("/device") ? "phone-icon" : "phone-icon-2"],
+    ["/settings/", "Settings", "settings-icon"],
   ];
   return (
     <>
@@ -49,8 +49,8 @@ function Chrome({ children }: { children: React.ReactNode }) {
         <Link href="/" className="brand">
           <Icon name="relay-mark" />
           <div>
-            <strong>relay</strong>
-            <span>OFFLINE MESH</span>
+            <strong>Relay</strong>
+            <span>OFFLINE MESH NETWORK</span>
           </div>
         </Link>
         <nav className="main-nav" aria-label="Main navigation">
@@ -68,20 +68,22 @@ function Chrome({ children }: { children: React.ReactNode }) {
               {label}
             </Link>
           ))}
+          <button className="nav-mode" onClick={() => setPreview(!preview)} aria-pressed={preview}>
+            <span className={`mode-indicator ${preview ? "preview" : "live"}`} />
+            {preview ? "Use live network" : "View design preview"}
+          </button>
         </nav>
         <div className="connection">
           <i className="status-dot cyan" />
           <div>
-            {preview ? "Bluetooth active" : `${transport} mesh`}
+            {preview ? "Design preview" : Object.keys(links).length ? `${[...new Set(Object.values(links))].map(transportLabel).join(" + ")} links` : "Offline mesh"}
             <small>
               {preview
-                ? "Internet unavailable"
-                : `${peers.filter((p) => p.status === "ALIVE").length} nearby ${peers.filter((p) => p.status === "ALIVE").length === 1 ? "peer" : "peers"}`}
+                ? "Sample devices & activity"
+                : `${peers.filter((p) => p.status === "ALIVE").length} reachable ${peers.filter((p) => p.status === "ALIVE").length === 1 ? "peer" : "peers"}`}
             </small>
           </div>
-          <Link href="/device/" aria-label="My device">
-            <Avatar name={deviceName} size={38} />
-          </Link>
+
         </div>
       </header>
       {!preview && error && (
@@ -90,17 +92,7 @@ function Chrome({ children }: { children: React.ReactNode }) {
         </div>
       )}
       <main>{children}</main>
-      <div className="mode-control">
-        <span>
-          {preview
-            ? "Design preview · sample devices and activity"
-            : "Live network · actual device data"}
-        </span>
-        <button onClick={() => setPreview(!preview)}>
-          {preview ? "Use live network" : "View design preview"}
-        </button>
-        <Link href="/settings/">Settings</Link>
-      </div>
+
     </>
   );
 }

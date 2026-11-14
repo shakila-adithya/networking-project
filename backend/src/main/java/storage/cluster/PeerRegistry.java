@@ -14,7 +14,7 @@ public final class PeerRegistry {
     private final ConcurrentHashMap<String, Member> members = new ConcurrentHashMap<>();
     private final CopyOnWriteArrayList<Consumer<Member>> listeners = new CopyOnWriteArrayList<>();
 
-    public PeerRegistry(String localPeerId, List<ReplicationManager.PeerEndpoint> initialPeers) {
+    public PeerRegistry(String localPeerId, List<PeerEndpoint> initialPeers) {
         this.localPeerId = Objects.requireNonNull(localPeerId);
         Objects.requireNonNull(initialPeers).forEach(endpoint -> {
             if (members.putIfAbsent(endpoint.name(), new Member(endpoint, PeerState.ALIVE,
@@ -25,7 +25,7 @@ public final class PeerRegistry {
         if (!members.containsKey(localPeerId)) throw new IllegalArgumentException("local peer is not registered");
     }
 
-    public boolean join(ReplicationManager.PeerEndpoint endpoint) {
+    public boolean join(PeerEndpoint endpoint) {
         Objects.requireNonNull(endpoint);
         if (endpoint.name().equals(localPeerId)) return false;
         for (Member member : members.values()) {
@@ -56,9 +56,9 @@ public final class PeerRegistry {
         listeners.add(Objects.requireNonNull(listener));
     }
 
-    public List<ReplicationManager.PeerEndpoint> endpoints() {
+    public List<PeerEndpoint> endpoints() {
         return members.values().stream().map(Member::endpoint)
-                .sorted(Comparator.comparing(ReplicationManager.PeerEndpoint::name)).toList();
+                .sorted(Comparator.comparing(PeerEndpoint::name)).toList();
     }
 
     public List<Member> members() {
@@ -76,6 +76,6 @@ public final class PeerRegistry {
 
     public enum PeerState { ALIVE, SUSPECTED, DEAD }
 
-    public record Member(ReplicationManager.PeerEndpoint endpoint, PeerState state,
+    public record Member(PeerEndpoint endpoint, PeerState state,
                          Instant lastSeen, boolean configured) { }
 }

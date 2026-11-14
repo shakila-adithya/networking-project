@@ -23,7 +23,7 @@ import java.util.Properties;
  * settings are written to a restore file first and put back by {@link #close()}; if the process dies without
  * closing, the next start restores them before doing anything else.
  */
-public final class BlueZAdapter implements BluetoothDiscovery, AutoCloseable {
+public final class BlueZAdapter implements LocalBluetooth {
     private final DeviceManager manager;
     private final BluetoothAdapter adapter;
     private final Path restoreFile;
@@ -67,14 +67,17 @@ public final class BlueZAdapter implements BluetoothDiscovery, AutoCloseable {
         }
     }
 
+    @Override
     public String address() {
         return BluetoothAddress.normalize(adapter.getAddress());
     }
 
+    @Override
     public synchronized String name() {
         return advertising && !advertisedName.isEmpty() ? advertisedName : adapter.getAlias();
     }
 
+    @Override
     public boolean isAdvertising() {
         return advertising;
     }
@@ -108,10 +111,14 @@ public final class BlueZAdapter implements BluetoothDiscovery, AutoCloseable {
      * Calling it again while advertising only renames the adapter.
      */
     public synchronized void advertise(String deviceId, String displayName) throws IOException {
+        advertise(deviceId, displayName, null);
+    }
+    @Override
+    public synchronized void advertise(String deviceId, String displayName, String meshId) throws IOException {
         if (!deviceId.matches("[A-Za-z0-9_-]{1,40}")) {
             throw new IllegalArgumentException("invalid device id");
         }
-        String wanted = Nearby.advertisedName(displayName, deviceId);
+        String wanted = meshId == null ? Nearby.advertisedName(displayName, deviceId) : Nearby.advertisedMeshName(displayName, deviceId, meshId);
         try {
             if (advertising) {
                 adapter.setAlias(wanted);
@@ -137,6 +144,7 @@ public final class BlueZAdapter implements BluetoothDiscovery, AutoCloseable {
     }
 
     /** Stops being visible: puts the adapter's original name and discoverable settings back. Scanning still works. */
+    @Override
     public synchronized void stopAdvertising() throws IOException {
         if (!advertising) {
             return;
@@ -152,7 +160,7 @@ public final class BlueZAdapter implements BluetoothDiscovery, AutoCloseable {
     private Properties captureOriginals() {
         String alias = adapter.getAlias();
         String systemName = adapter.getName();
-        boolean ours = alias != null && (alias.startsWith(Nearby.NAME_PREFIX) || alias.matches(".*\\[relay:[A-Za-z0-9_-]+\\]$"));
+        boolean ours = alias != null && (alias.startsWith(Nearby.NAME_PREFIX) || new Nearby("", alias, null, false).relayDeviceId().isPresent());
         Properties captured = new Properties();
         // An empty alias means "reset to the system name", which is also what restores a default-named adapter.
         captured.setProperty("alias", alias == null || ours || alias.equals(systemName) ? "" : alias);

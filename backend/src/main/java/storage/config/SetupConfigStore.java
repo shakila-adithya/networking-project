@@ -21,6 +21,14 @@ public final class SetupConfigStore {
     }
     private final Path path;
     public SetupConfigStore(Path path) { this.path = path.toAbsolutePath().normalize(); }
+    // A separate marker keeps existing configuration and received-file paths intact when leaving a mesh.
+    public boolean autoJoin() { return !Files.exists(path.resolveSibling(path.getFileName() + ".left")); }
+    public void setAutoJoin(boolean enabled) throws IOException {
+        Path marker = path.resolveSibling(path.getFileName() + ".left");
+        if (enabled) Files.deleteIfExists(marker);
+        else { Files.createDirectories(path.getParent()); Files.writeString(marker, "left\n"); }
+    }
+    public Path directory() { return path.getParent(); }
     public boolean exists() { return Files.exists(path); }
     public Saved load() throws IOException {
         try { return JSON.readValue(Files.readAllBytes(path), Saved.class); }

@@ -15,7 +15,7 @@ Bluetooth is **on by default** (`mesh.transport=both`: TCP plus Bluetooth). It f
 the UI, if Bluetooth is unavailable: no adapter, BlueZ not running, or RFCOMM channel 22 already held by another Relay on the
 same computer. Your device is **hidden until you make it visible**.
 
-* **My device** tab: set the name other people see (up to 32 characters, any language). The device id (for example `C`) stays the
+* **Settings → Your device name**: set the name other people see (up to 32 characters, any language). The device id (for example `C`) stays the
   stable internal address and is changed in Settings. Nothing about visibility is on this page.
 * **Network map** tab: select **your own device** on the map to get the **Visible to nearby devices** switch. Switching it on
   advertises `<name> [relay:<id>]`; off puts the adapter back. The choice is remembered (`backend/config/device-profile.json`).
@@ -51,7 +51,7 @@ Hardware tests in the repo: `NativeRfcommHardwareTest` (real kernel sockets; run
 for a moment, scans, tries a real connection to a device that is not there).
 
 ## What has and has not been verified
-Verified **on real hardware (one laptop, controller `hci0`)**: opening, binding, listening on and closing real RFCOMM sockets
+Earlier, pre-v2 checks recorded **on real hardware (one laptop, controller `hci0`)**: opening, binding, listening on and closing real RFCOMM sockets
 (including waking a thread blocked in accept); a real BlueZ scan listing real nearby devices; advertising as `relay:<id>`
 and restoring the original name/discoverable settings on quit, Ctrl+C and a simulated crash; a real connection attempt to a
 device that is not there failing with a readable error; the full app running with `-Dmesh.transport=both` and exposing
@@ -63,7 +63,7 @@ adapter and the layers above it but is **not** Bluetooth.
 ## Limitations
 * Bluetooth Classic only (no BLE); Linux/BlueZ only; one RFCOMM channel (22).
 * Scanning is a duty cycle (8 s every 30 s) because inquiry slows connections; discovery is therefore not instant.
-* Connections are made without app-level authentication or encryption (dropped from the plan); Bluetooth's own
-  link security applies only if the devices are paired. If a device demands pairing, the connection is refused.
+* Application entry points now wrap RFCOMM in J-PAKE password authentication and TLS authenticated encryption. Honor system pairing prompts when the stack requires them. The secured two-device Bluetooth path has not been validated on real hardware.
 * Signal strength (RSSI) is shown only when BlueZ reports it; link cost for routing is still hop count.
-* Names are matched on `[relay:<id>]`; anyone can name a device that way.
+* Visible members advertise public `[relay:<id>] [mesh:<meshId>]` tags. Anyone can spoof these names; the secure carrier must authenticate before HELLO or application traffic.
+* Setup mode can scan Bluetooth meshes before membership and authenticate a selected RFCOMM endpoint. See [current implementation and hardware limits](offline-mesh-status.md).

@@ -83,7 +83,7 @@ class ShutdownTest {
         Path file = workDir.resolve("cli-config.json");
         Files.writeString(file, """
                 {"localPeerId":"A","bindAddress":"127.0.0.1","advertisedAddress":"127.0.0.1","port":%d,
-                 "storageDirectory":"storage-data/A",
+                 "storageDirectory":"storage-data/A","discoverySecret":"test-only-shutdown-password",
                  "peers":[{"id":"A","address":"127.0.0.1","port":%d},{"id":"B","address":"127.0.0.1","port":%d}]}
                 """.formatted(port, port, port + 5));
         return file.toString();

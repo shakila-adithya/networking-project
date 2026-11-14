@@ -1,7 +1,7 @@
 package storage.discovery;
 
 import storage.cluster.PeerRegistry;
-import storage.cluster.ReplicationManager;
+import storage.cluster.PeerEndpoint;
 import storage.config.PeerConfiguration;
 import com.fasterxml.jackson.databind.DeserializationFeature;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -38,7 +38,7 @@ public final class DiscoveryManager implements AutoCloseable {
 
     private final PeerConfiguration configuration;
     private final PeerRegistry registry;
-    private final Consumer<ReplicationManager.PeerEndpoint> peerListener;
+    private final Consumer<PeerEndpoint> peerListener;
     private final ConcurrentHashMap<String, RateWindow> rateWindows = new ConcurrentHashMap<>();
     private final ScheduledExecutorService announcer;
     private final AtomicBoolean running = new AtomicBoolean();
@@ -53,7 +53,7 @@ public final class DiscoveryManager implements AutoCloseable {
     private volatile Thread receiver;
 
     public DiscoveryManager(PeerConfiguration configuration, PeerRegistry registry,
-                             Consumer<ReplicationManager.PeerEndpoint> peerListener) {
+                             Consumer<PeerEndpoint> peerListener) {
         this.configuration = Objects.requireNonNull(configuration);
         this.registry = Objects.requireNonNull(registry);
         this.peerListener = Objects.requireNonNull(peerListener);
@@ -170,8 +170,8 @@ public final class DiscoveryManager implements AutoCloseable {
             reject("unauthorized or invalid join");
             return false;
         }
-        ReplicationManager.PeerEndpoint endpoint;
-        try { endpoint = new ReplicationManager.PeerEndpoint(message.peerId(), message.address(), message.port()); }
+        PeerEndpoint endpoint;
+        try { endpoint = new PeerEndpoint(message.peerId(), message.address(), message.port()); }
         catch (IllegalArgumentException e) { reject("invalid endpoint"); return false; }
         if (!registry.join(endpoint)) {
             reject("duplicate identity or endpoint");

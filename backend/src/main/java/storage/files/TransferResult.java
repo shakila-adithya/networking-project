@@ -11,7 +11,4 @@ public record TransferResult(boolean success, String code, String message, UUID 
         return new TransferResult(false, code, message, fileId);
     }
 
-    public static TransferResult storedWithWarning(String code, String message, UUID fileId) {
-        return new TransferResult(true, code, message, fileId);
-    }
 }

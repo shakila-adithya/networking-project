@@ -13,14 +13,16 @@ Backend root package `storage`, one sub-package per responsibility:
 | `app` | `PeerNode` (entry point, console loop), `ManagedPeer` (node lifecycle in setup mode) |
 | `config` | `PeerConfiguration`, `SetupConfigStore`, `LocalNetworks` |
 | `transport` | `PeerServer` (`ServerSocket`), `PeerClient` (`Socket`), `Protocol` (framing); `Transport`/`Link` boundary with `TcpTransport` and the `InMemoryTransport` simulation |
-| `discovery` | `DiscoveryManager` (UDP multicast, `DatagramSocket`), `Candidate` |
+| `discovery` | `MeshDirectory` (unverified public UDP advertisements), legacy `DiscoveryManager`, `Candidate` |
+| `security` | Bouncy Castle J-PAKE authentication, purpose-separated HKDF, TLS AES-GCM carriers |
+| `platform` | Linux NetworkManager D-Bus Wi-Fi Direct/hotspot control and verified IP interface kinds |
 | `device` | `DeviceProfile` (display name + visibility), `DeviceProfileStore`, `DeviceProfileService` |
 | `link` | `HeartbeatManager` (neighbour liveness), `TopologyController` (see [topology.md](topology.md)) |
 | `messaging` | `Message`/`MessageCodec`, `MeshNode` (neighbours, relay, dedupe), `ChatService` (ack + bounded retry) |
 | `transfer` | `MeshFileService`: chunked, acknowledged, resumable file transfer over routes (see [file-transfer.md](file-transfer.md)) |
 | `bluetooth` | `NativeRfcomm` (RFCOMM kernel sockets via FFM), `BluetoothTransport`, `BlueZAdapter`, `BluetoothScanner` (see [bluetooth.md](bluetooth.md)) |
 | `routing` | `AodvRouter`, `RoutingTable`, `LinkCost` (see [routing.md](routing.md)) |
-| `cluster` | `PeerRegistry`, `ReplicationManager`, `SelfHealingManager`, `ReconciliationManager` |
+| `cluster` | `PeerRegistry` (membership), `PeerEndpoint` (shared peer addresses) |
 | `files` | `FileStore`, `FileMetadata`, inventory/metadata JSON, hashing |
 | `web` | `RestApiServer`, `SetupAgent` (local UI API, no Internet needed) |
 
@@ -30,7 +32,9 @@ Backend folders: `backend/config/examples/` (sample peer configs; `backend/confi
 generated and git-ignored). The UI talks to the backend only through `/api` (setup agent on port 6080 proxies
 to the node's REST API), so the two parts can be developed separately.
 
-Still planned: file sharing over routes, security, and the Bluetooth transport.
+File sharing supports direct TCP and routed mesh delivery. Bluetooth Classic support targets Linux/BlueZ; see the hardware verification limits in the Bluetooth guide. Application entry points protect both carrier and direct file-service traffic with J-PAKE and TLS. See [implementation status and remaining platform gaps](offline-mesh-status.md).
+
+There is no automatic backup replication or storage repair. Files remain only on intentional recipients; deleting through REST affects only local files. Existing received files and old metadata are preserved. Network route and connection recovery still run.
 
 ## How the frontend connects to the backend
 | UI call | Backend |
@@ -43,6 +47,8 @@ Still planned: file sharing over routes, security, and the Bluetooth transport.
 | `bluetooth` object in `GET /api/mesh` | `MeshRuntime.bluetoothStatus` (adapter, nearby devices) |
 | `GET/POST /api/device` (display name, visibility), `GET /api/nearby`, `POST /api/bluetooth/scan`, `POST /api/mesh/connect {deviceId}` | `DeviceApi` implemented by `MeshRuntime`; profile saved by `device.DeviceProfileStore` |
 | `/api/setup/*` (Settings page) | `SetupAgent` |
+| `/api/membership`, `/api/membership/{scan,create,join,leave}` | `SetupAgent`, public LAN/Bluetooth directory, authenticated membership |
+| `/api/radio`, `/api/radio/{scan,connect,hotspot,stop}` | `NetworkManagerService` (local user + disconnection acknowledgement) |
 
 The setup agent (port 6080) serves `frontend/dist` and proxies every other `/api/` call to the running node.
 In live mode the people list is the union of heartbeat peers, mesh neighbours and routed destinations

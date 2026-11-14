@@ -115,6 +115,8 @@ public final class TcpTransport implements Transport {
             this.out = new DataOutputStream(socket.getOutputStream());
         }
 
+        @Override public String kind() { return storage.platform.IpLinkKinds.forAddress(socket.getLocalAddress()); }
+
         @Override
         public String remoteAddress() {
             return remote;

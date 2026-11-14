@@ -1,9 +1,12 @@
 "use client";
-import { useState } from "react";
+import { useRef, useState } from "react";
 import Link from "next/link";
-import { useMesh, Person } from "@/lib/mesh";
+import { useMesh, Person, transportLabel } from "@/lib/mesh";
 import { Icon, Eyebrow, Badge, Search } from "./ui";
-import { NearbyPanel, VisibilityCard, ConnectCard } from "./nearby";
+import { MeshMembership } from "./mesh-membership";
+import { MapViewport, type MapCamera } from "./map-viewport";
+import { ConnectionGlyph } from "./connection-glyph";
+import { VisibilityCard, ConnectCard } from "./nearby";
 const sample: Person[] = [
   {
     id: "You",
@@ -79,20 +82,24 @@ const sample: Person[] = [
   },
 ];
 export function NetworkMap() {
-  const { preview, peers, neighbours, localId, transport, bluetooth, device, nearby } = useMesh(),
+  const { preview, peers, neighbours, localId, links, error, bluetooth, device, nearby } = useMesh(),
     [search, setSearch] = useState(""),
-    [zoom, setZoom] = useState(1),
-    [selected, setSelected] = useState<Person | null>(null);
+    [selected, setSelected] = useState<Person | null>(null),
+    [selectedSelf, setSelectedSelf] = useState(false);
+  const camera = useRef<MapCamera>(null);
+  const clearSelection = () => { setSelected(null); setSelectedSelf(false); };
   // Relay devices that were found nearby but are not connected yet appear as muted "discovered" nodes.
-  const discovered: Person[] = nearby.items
-    .filter((i) => i.relay && i.deviceId && i.state !== "CONNECTED" && !peers.some((p) => p.id === i.deviceId))
-    .map((i) => ({
-      id: i.deviceId as string,
-      name: i.name,
-      detail: `Nearby · ${i.kind === "bluetooth" ? "Bluetooth" : "LAN"}`,
-      tone: "muted",
-      status: "DISCOVERED",
-    }));
+  const candidates = nearby.items.filter(item => item.relay && item.deviceId && !item.peerConnected
+    && item.state !== "CONNECTED" && !peers.some(peer => peer.id === item.deviceId));
+  const discovered: Person[] = [...new Set(candidates.map(item => item.deviceId as string))].map(id => {
+    const addresses = candidates.filter(item => item.deviceId === id);
+    const methods = [...new Set(addresses.map(item => ["lan", "tcp"].includes(item.kind) ? "Wi-Fi / LAN" : transportLabel(item.kind)))];
+    return { id, name: addresses[0].name, detail: `Nearby · ${methods.join(" + ")}`, tone: "muted", status: "DISCOVERED" };
+  });
+  const discoveredCount = new Set([
+    ...nearby.items.filter(item => item.relay && !item.peerConnected && item.state !== "CONNECTED" && item.deviceId).map(item => item.deviceId),
+    ...(bluetooth?.nearby || []).filter(item => item.relayDevice && !neighbours.includes(item.relayDevice)).map(item => item.relayDevice),
+  ]).size;
   const around = [...peers, ...discovered];
   const nodes = preview
     ? sample
@@ -114,8 +121,9 @@ export function NetworkMap() {
             350 + Math.sin((i * 2 * Math.PI) / Math.max(around.length, 1)) * 240,
         })),
       ];
+  const activeMethods = [...new Set(Object.values(links))].map(transportLabel).join(" · ");
   const selfNode = nodes[0];
-  const selectedIsSelf = !!selected && selected.id === selfNode.id;
+  const selectedIsSelf = !!selected && selectedSelf;
   const selectedIsDiscovered = !!selected && selected.status === "DISCOVERED";
   const edges = preview
     ? [
@@ -135,23 +143,19 @@ export function NetworkMap() {
   return (
     <section className="map-page">
       <div className="map-heading">
-        <Eyebrow gold>LIVE NETWORK TOPOLOGY</Eyebrow>
-        <h1>
-          The mesh,
-          <br />
-          in motion.
-        </h1>
-        <p>See how devices connect, relay and adapt.</p>
+        <Eyebrow gold>{preview ? "DESIGN PREVIEW" : "YOUR NETWORK"}</Eyebrow>
+        <h1>Your nearby devices</h1>
+        <p>Chat and share files using Bluetooth, Wi-Fi, Ethernet or a hotspot.</p>
         <div className="badge-row">
           <Badge>
             {preview
-              ? "MESH ACTIVE"
-              : peers.length
-                ? "MESH ACTIVE"
-                : "LOCAL DEVICE"}
+              ? "EXAMPLE DEVICES"
+              : neighbours.length
+                ? "Connected to nearby devices"
+                : "Not connected to other devices"}
           </Badge>
           <Badge tone="cyan">
-            {preview ? "Discovering nearby" : `${transport} connections`}
+            {preview ? "Sample connections" : "No internet needed"}
           </Badge>
         </div>
         <Search
@@ -160,9 +164,13 @@ export function NetworkMap() {
           placeholder="Find a device"
           icon="search-icon-3"
         />
+        {search.trim() && <div className="map-search-results" role="group" aria-label="Found devices">
+          {nodes.filter(p => p.name.toLowerCase().includes(search.trim().toLowerCase()) || p.id.toLowerCase().includes(search.trim().toLowerCase())).map(p => <button className="button" key={p.id} onClick={() => { setSelected(p); setSelectedSelf(p.id === selfNode.id); camera.current?.centerOn(p.x!, p.y!); }}><span>{p.name}</span><small>{p.detail}</small><span aria-hidden="true">↗</span></button>)}
+          {!nodes.some(p => p.name.toLowerCase().includes(search.trim().toLowerCase()) || p.id.toLowerCase().includes(search.trim().toLowerCase())) && <p>No devices found. Try another name.</p>}
+        </div>}
       </div>
-      <div className="topology">
-        <div className="topology-inner" style={{ transform: `scale(${zoom})` }}>
+      <div className="map-area">
+      <MapViewport key={preview ? "preview" : "live"} cameraRef={camera} self={{ x: selfNode.x!, y: selfNode.y! }} onClear={clearSelection}>
           <div className="orbit-grid" />
           <svg
             className="connections"
@@ -194,12 +202,13 @@ export function NetworkMap() {
           {nodes.map((p, i) => (
             <button
               key={p.id}
-              className={`map-node ${p.tone} ${i === 0 ? "self" : ""} ${search && !p.name.toLowerCase().includes(search.toLowerCase()) ? "dim" : ""}`}
+              aria-pressed={selected?.id === p.id}
+              className={`map-node ${p.tone} ${i === 0 ? "self" : ""} ${search.trim() && !p.name.toLowerCase().includes(search.trim().toLowerCase()) && !p.id.toLowerCase().includes(search.trim().toLowerCase()) ? "dim" : ""}`}
               style={{
                 left: `${(p.x! / 1050) * 100}%`,
                 top: `${(p.y! / 760) * 100}%`,
               }}
-              onClick={() => setSelected(p)}
+              onClick={() => { setSelected(p); setSelectedSelf(p.id === selfNode.id); }}
               aria-label={`Inspect ${p.name}`}
             >
               <span className="device-tile">
@@ -244,165 +253,58 @@ export function NetworkMap() {
               </div>
             </>
           )}
+      </MapViewport>
+      <div className="map-key" aria-label="Map key">
+        <div className="map-key-items">
+          {(preview
+            ? [["gold-text", "Direct link"], ["cyan", "Via another device"], ["green", "Alternative route"], ["red", "Link unavailable"], ["muted", "Nearby device"]]
+            : [["gold-text", "Direct link"], ["muted", "Nearby device"]]
+          ).map(([tone, label]) => <span key={label}><i className={tone} aria-hidden="true" />{label}</span>)}
         </div>
+        <p className="map-key-note">Shows connections, not exact locations.</p>
+      </div>
       </div>
       <aside className="network-inspector">
         <div className="row between">
           <Eyebrow>{selected ? "DEVICE DETAILS" : "NETWORK OVERVIEW"}</Eyebrow>
-          <button
-            className="icon-button"
-            aria-label="Reset inspector"
-            onClick={() => setSelected(null)}
-          >
-            <Icon name="more-icon-3" />
-          </button>
+          {selected && <button className="button inspector-back" aria-label="Reset inspector" onClick={() => { setSelected(null); setSelectedSelf(false); }}>Overview</button>}
         </div>
         <div className="mesh-identity">
-          <Icon name="bluetooth-mesh-icon" />
+          <span className="overview-symbol"><ConnectionGlyph kind="mesh" /></span>
           <div>
-            <h2>{selected?.name || "Offline mesh"}</h2>
+            <h2>{selected?.name || "Your connections"}</h2>
             <p>
               {selected?.detail ||
                 (preview
-                  ? "Bluetooth connections"
-                  : `${transport} connections`)}
+                  ? "Example of a mixed-transport mesh"
+                  : neighbours.length ? `Active links: ${activeMethods}` : error ? "Local service unavailable" : "Choose a method to connect nearby devices")}
             </p>
           </div>
         </div>
         <div className="badge-row">
-          <Badge>{selected?.status || "Active"}</Badge>
-          <Badge tone="cyan">{preview ? "Discovering" : "Local network"}</Badge>
+          <Badge tone={preview || neighbours.length ? "green" : "muted"}>{selected?.status || (preview ? "Preview mesh" : neighbours.length ? "Connected" : "No active links")}</Badge>
+          <Badge tone="cyan">{preview ? "Preview only" : "Offline mesh"}</Badge>
         </div>
         {selectedIsSelf && <VisibilityCard />}
         {selectedIsDiscovered && <ConnectCard id={selected!.id} fallbackName={selected!.name} />}
         <hr />
         <div className="network-metrics">
-          <div>
-            <Eyebrow>CONNECTED</Eyebrow>
-            <strong>
-              {preview ? 6 : peers.filter((p) => p.status === "ALIVE").length}
-            </strong>
-            <small>devices</small>
-          </div>
-          <div>
-            <Eyebrow>DIRECT LINKS</Eyebrow>
-            <strong>{preview ? 3 : neighbours.length}</strong>
-            <small>from you</small>
-          </div>
-          <div>
-            <Eyebrow>DISCOVERED</Eyebrow>
-            <b>{preview ? "1 nearby" : `${peers.length} peer${peers.length === 1 ? "" : "s"}`}</b>
-            <small>
-              {!preview && bluetooth
-                ? `${bluetooth.nearby.length} Bluetooth device${bluetooth.nearby.length === 1 ? "" : "s"} nearby · ${bluetooth.nearby.filter((d) => d.relayDevice).length} running Relay`
-                : "Not connected yet"}
-            </small>
-          </div>
-          <div>
-            <Eyebrow>REACHABLE</Eyebrow>
-            <b>{preview ? "2 via relays" : "Not reported"}</b>
-            <small>Multiple hops</small>
-          </div>
+          <div><Eyebrow>DIRECT LINKS</Eyebrow><strong>{preview ? 3 : neighbours.length}</strong><small>connected to you</small></div>
+          <div><Eyebrow>VIA RELAYS</Eyebrow><strong>{preview ? 2 : peers.filter(p => p.status === "ALIVE" && p.detail.startsWith("Via ")).length}</strong><small>reachable devices</small></div>
+          <div className="discovery-summary"><i className="status-dot cyan" /><span>{preview ? "1 Relay device nearby" : `${discoveredCount} Relay device${discoveredCount === 1 ? "" : "s"} discovered`}</span></div>
         </div>
-        {!selected && <NearbyPanel />}
-        <Eyebrow>SELF-HEALING</Eyebrow>
-        <div className="recovery">
-          <Icon name="refresh-icon-5" />
-          <div>
-            <b>
-              {preview ? "Alternative route available" : "Automatic recovery"}
-            </b>
-            <p>
-              {preview ? (
-                <>
-                  A lost connection was bypassed
-                  <br />
-                  through another connected device.
-                </>
-              ) : (
-                "Route recovery is managed by the local node."
-              )}
-            </p>
-          </div>
-        </div>
-        <Eyebrow>RECENT NETWORK EVENTS</Eyebrow>
-        <div className="events">
-          {(preview
-            ? [
-                ["Route restored", "Kasun ↔ Ravi", "Now", "green"],
-                ["Link unavailable", "Nimal ↔ Peer 07", "1m", "red"],
-                ["Device discovered", "Nearby device found", "2m", "cyan"],
-              ]
-            : peers.map((p) => ["Peer " + p.status, p.name, "Live", p.tone])
-          ).map(([title, desc, time, tone]) => (
-            <div className="event" key={title + desc}>
-              <i className={`status-dot ${tone}`} />
-              <div>
-                <b>{title}</b>
-                <small>{desc}</small>
-              </div>
-              <time>{time}</time>
-            </div>
-          ))}
-        </div>
+        <MeshMembership showPeers={!selected} />
+        {preview && <details className="network-history"><summary>Preview network events</summary>
+          <div className="events">{[["Route restored", "Kasun ↔ Ravi"], ["Link unavailable", "Nimal ↔ Peer 07"]].map(([title, detail]) => <div className="event" key={title}><i className="status-dot green" /><div><b>{title}</b><small>{detail}</small></div></div>)}</div>
+        </details>}
         {selected && (
           <Link className="button" href="/messages/">
             Open messages
           </Link>
         )}
       </aside>
-      <div className="map-bottom">
-        <div className="legend">
-          {[
-            "Connected",
-            "Forwarding",
-            "New route",
-            "Link lost",
-            "Discovered",
-          ].map((v, i) => (
-            <span key={v}>
-              <i
-                className={["gold-text", "cyan", "green", "red", "muted"][i]}
-              />
-              {v}
-            </span>
-          ))}
-        </div>
-        <div className="map-tools">
-          {[
-            ["map-control-focus", "Reset zoom", () => setZoom(1)],
-            [
-              "map-control-plus",
-              "Zoom in",
-              () => setZoom((z) => Math.min(1.5, z + 0.1)),
-            ],
-            [
-              "map-control-minus",
-              "Zoom out",
-              () => setZoom((z) => Math.max(0.7, z - 0.1)),
-            ],
-          ].map(([icon, label, fn]) => (
-            <button
-              key={String(icon)}
-              aria-label={String(label)}
-              onClick={fn as () => void}
-            >
-              <Icon name={String(icon)} />
-            </button>
-          ))}
-        </div>
-        <Eyebrow>TOPOLOGY VIEW · POSITIONS ARE ILLUSTRATIVE</Eyebrow>
-      </div>
-      {preview && (
-        <div className="network-toast">
-          <Icon name="refresh-icon-6" />
-          <div>
-            <b>Network adapted</b>
-            <small>A connection was lost · another route is available</small>
-          </div>
-          <span>NOW</span>
-        </div>
-      )}
+
+
     </section>
   );
 }

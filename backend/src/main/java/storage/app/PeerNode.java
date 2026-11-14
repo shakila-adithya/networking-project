@@ -1,14 +1,11 @@
 package storage.app;
 
 import storage.cluster.PeerRegistry;
-import storage.cluster.ReconciliationManager;
-import storage.cluster.ReplicationManager;
-import storage.cluster.SelfHealingManager;
+import storage.cluster.PeerEndpoint;
 import storage.config.PeerConfiguration;
 import storage.device.DeviceProfileService;
 import storage.device.DeviceProfileStore;
 import storage.config.SetupConfigStore;
-import storage.discovery.DiscoveryManager;
 import storage.files.FileMetadata;
 import storage.files.InventoryComparator;
 import storage.files.TransferResult;
@@ -28,7 +25,7 @@ import java.util.Scanner;
 public final class PeerNode {
     private static final String COMMANDS = "ping <host> <port> | put <host> <port> <file-path> | "
             + "get <host> <port> <file-id> <destination> | inventory | status | peers | discovery-status | "
-            + "repair-status | reconcile-status | neighbours | topology | routes | name <text> | visible on|off | bluetooth | send-file <device-id> <path> | transfers | mesh-connect <host:meshPort> | "
+            + "neighbours | topology | routes | name <text> | visible on|off | bluetooth | send-file <device-id> <path> | transfers | mesh-connect <host:meshPort> | "
             + "chat <device-id|*> <text> | inbox | chat-status <chat-id> | help | quit";
 
     private PeerNode() {
@@ -68,28 +65,25 @@ public final class PeerNode {
     }
 
     private static void run(PeerConfiguration configuration) throws IOException {
+        var security = new storage.security.MeshSecurity(configuration.clusterId(), configuration.discoverySecret());
+        PeerClient.authenticated(security, () -> { runAuthenticated(configuration, security); return null; });
+    }
+    private static void runAuthenticated(PeerConfiguration configuration, storage.security.MeshSecurity security) throws IOException {
         String name = configuration.localPeerId();
         PeerRegistry registry = new PeerRegistry(name, configuration.peerEndpoints());
-        ReplicationManager replicationManager = new ReplicationManager(name, registry::endpoints);
         int restPort = Integer.getInteger("rest.port", configuration.port() + RestApiServer.DEFAULT_PORT_OFFSET);
         DeviceProfileService profile = new DeviceProfileService(
                 new DeviceProfileStore(Path.of("config", "device-profile.json")));
         try (PeerServer server = new PeerServer(configuration.bindAddress(), configuration.port(),
-             configuration.storagePath(), replicationManager);
-             HeartbeatManager heartbeatManager = new HeartbeatManager(name, registry.endpoints());
-             SelfHealingManager selfHealingManager = new SelfHealingManager(
-                     name, server.fileStore(), replicationManager, heartbeatManager);
-             ReconciliationManager reconciliationManager = new ReconciliationManager(
-                     name, server.fileStore(), replicationManager, heartbeatManager, selfHealingManager);
+             configuration.storagePath(), name).secure(security);
+             HeartbeatManager heartbeatManager = new HeartbeatManager(name, registry.endpoints(), security);
              RestApiServer restApi = new RestApiServer(configuration.bindAddress(), restPort, name,
                      configuration.advertisedAddress(), configuration.port(), server.fileStore(), heartbeatManager,
-                     replicationManager);
+                     registry);
              MeshRuntime mesh = new MeshRuntime(configuration, server.fileStore(), profile);
-             DiscoveryManager discoveryManager = configuration.discoveryEnabled()
-                     ? new DiscoveryManager(configuration, registry, endpoint -> {
-                         heartbeatManager.refreshPeers(registry.endpoints());
-                         mesh.offerPeer(endpoint, false);
-                     }) : null) {
+             storage.discovery.MeshDirectory discoveryManager = new storage.discovery.MeshDirectory(
+                     () -> configuration, endpoint -> mesh.offerPeer(endpoint, false))) {
+            restApi.attachSecurity(security);
             for (var endpoint : registry.endpoints()) mesh.offerPeer(endpoint, true);
             // Ctrl+C / SIGTERM must still restore the Bluetooth adapter's name; closing the mesh is idempotent.
             Runtime.getRuntime().addShutdownHook(new Thread(new ShutdownTask(mesh), "mesh-shutdown"));
@@ -98,7 +92,6 @@ public final class PeerNode {
                     id -> System.out.println("[mesh] neighbour down: " + id));
             mesh.chat().onReceive(chat ->
                     System.out.println("[chat] " + chat.from() + " -> " + chat.to() + ": " + chat.text()));
-            replicationManager.setRoutedDelivery(mesh::sendFile);
             restApi.attachMesh(mesh.node(), mesh.chat(), mesh.kind(), mesh::routes, mesh.files());
             restApi.attachBluetooth(mesh::bluetoothStatus);
             restApi.attachDevice(mesh);
@@ -113,8 +106,6 @@ public final class PeerNode {
             server.start();
             heartbeatManager.start();
             restApi.start();
-            selfHealingManager.start();
-            reconciliationManager.start();
             if (discoveryManager != null) discoveryManager.start();
             System.out.printf("Peer %s listening on %s:%d (advertised as %s:%d)%n",
                     name, configuration.bindAddress(), configuration.port(),
@@ -142,8 +133,6 @@ public final class PeerNode {
                     case "status" -> status(heartbeatManager);
                     case "peers" -> peers(registry);
                     case "discovery-status" -> discoveryStatus(configuration, discoveryManager);
-                    case "repair-status" -> repairStatus(selfHealingManager);
-                    case "reconcile-status" -> reconcileStatus(reconciliationManager);
                     case "neighbours" -> System.out.println("Neighbours: " + new java.util.TreeSet<>(mesh.node().neighbourIds()));
                     case "topology" -> mesh.topologyStatus().forEach(t -> System.out.printf(
                             "%-12s %-22s signal=%-3d %s failures=%d %s%n", t.candidate().deviceId(),
@@ -327,50 +316,16 @@ public final class PeerNode {
     private static void peers(PeerRegistry registry) {
         System.out.println("Peer  Address              State       Source");
         for (PeerRegistry.Member member : registry.members()) {
-            ReplicationManager.PeerEndpoint peer = member.endpoint();
+            PeerEndpoint peer = member.endpoint();
             System.out.printf("%-5s %-20s %-11s %s%n", peer.name(),
                     peer.host() + ":" + peer.port(), member.state(),
                     member.configured() ? "configured" : "discovered");
         }
     }
 
-    private static void discoveryStatus(PeerConfiguration configuration, DiscoveryManager manager) {
-        if (!configuration.discoveryEnabled() || manager == null) {
-            System.out.println("Discovery: disabled");
-            return;
-        }
-        DiscoveryManager.DiscoveryStatus status = manager.status();
-        System.out.printf("Discovery: %s group=%s:%d received=%d accepted=%d rejected=%d last-rejection=%s%n",
-                status.running() ? "running" : "stopped", status.group(), status.port(),
-                status.received(), status.accepted(), status.rejected(), status.lastRejectReason());
-    }
-
-    private static void repairStatus(SelfHealingManager manager) {
-        SelfHealingManager.RepairStatus status = manager.status();
-        System.out.println("Under-replicated files:");
-        if (status.underReplicated().isEmpty()) System.out.println("  (none)");
-        for (SelfHealingManager.RepairView view : status.underReplicated()) {
-            System.out.printf("  %s  state=%s  copies=%s%n", view.fileId(), view.state(), view.copies());
-        }
-        System.out.println("Active repairs: " + status.activeRepairs());
-        System.out.println("Recent outcomes:");
-        status.recentOutcomes().forEach(outcome ->
-                System.out.printf("  %s %s %s%n", outcome.at(), outcome.fileId(), outcome.state()));
-    }
-
-    private static void reconcileStatus(ReconciliationManager manager) {
-        ReconciliationManager.ReconciliationStatus status = manager.status();
-        System.out.println("Reconciliation state:");
-        if (status.files().isEmpty()) System.out.println("  (none)");
-        status.files().forEach(view -> System.out.printf(
-                "  %s  state=%s  preferred=%s  extra-candidates=%s  conflicts=%s  unavailable=%s%n",
-                view.fileId(), view.state(), view.preferredReplicas(), view.extraCandidates(),
-                view.metadataConflicts(), view.unavailablePeers()));
-        System.out.println("Active reconciliations: " + status.activeReconciliations());
-        System.out.println("Recent outcomes:");
-        status.recentOutcomes().forEach(outcome ->
-                System.out.printf("  %s %s %s %s%n", outcome.at(), outcome.fileId(),
-                        outcome.state(), outcome.message()));
+    private static void discoveryStatus(PeerConfiguration configuration, storage.discovery.MeshDirectory manager) {
+        System.out.println("Public advertisements (unverified): " + manager.nearby());
+        System.out.println("Discovery status: " + manager.error());
     }
 
     private static void inventory(String localName, PeerServer server,

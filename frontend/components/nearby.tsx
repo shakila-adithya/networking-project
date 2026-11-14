@@ -22,27 +22,31 @@ function SignalBars({ signal }: { signal: number | null }) {
 const order = { CONNECTED: 0, AVAILABLE: 1, FAILED: 2, OTHER: 3 } as const;
 
 function describe(item: NearbyItem) {
-  const how = item.kind === "bluetooth" ? "Bluetooth" : "LAN";
+  const how = item.kind === "bluetooth" ? "Bluetooth" : item.kind === "wifi-direct" ? "Wi-Fi Direct / TCP" : item.kind === "hotspot" ? "Hotspot / TCP" : "LAN / TCP";
   if (!item.relay) return `${how} · not a Relay device`;
   const hops = item.hops ? ` · ${item.hops} hop${item.hops === 1 ? "" : "s"}` : "";
-  return `${how} · ID ${item.deviceId}${hops}`;
+  return `${how} · ID ${item.deviceId}${hops}${item.state === "CONNECTED" ? "" : " · unverified candidate"}`;
 }
 
 /** The "Nearby devices" list: scan, see signal and state, connect. */
-export function NearbyPanel() {
+export function NearbyPanel({ method, embedded = false, onScan, scanAvailable, scanning }: {
+  method?: "bluetooth" | "lan"; embedded?: boolean; onScan?: () => Promise<void>; scanAvailable?: boolean; scanning?: boolean;
+} = {}) {
   const { nearby, scanNearby, connectNearby } = useMesh();
   const [busy, setBusy] = useState<string | null>(null),
     [errors, setErrors] = useState<Record<string, string>>({}),
     [scanError, setScanError] = useState(""),
     [address, setAddress] = useState(""),
     [addressMessage, setAddressMessage] = useState("");
-  const items = [...nearby.items].sort(
+  const isScanning = scanning ?? nearby.scanning;
+  const canScan = scanAvailable ?? nearby.bluetoothAvailable;
+  const items = [...nearby.items].filter(item => !method || (method === "bluetooth" ? item.kind === "bluetooth" : ["lan", "tcp"].includes(item.kind))).sort(
     (a, b) => order[a.state] - order[b.state] || (b.signal ?? -1) - (a.signal ?? -1),
   );
   async function scan() {
     setScanError("");
     try {
-      await scanNearby();
+      await (onScan || scanNearby)();
     } catch (e) {
       setScanError((e as Error).message);
     }
@@ -52,7 +56,7 @@ export function NearbyPanel() {
     setBusy(item.deviceId);
     setErrors((e) => ({ ...e, [item.deviceId!]: "" }));
     try {
-      await connectNearby(item.deviceId);
+      await connectNearby(item.deviceId, item.address);
     } catch (e) {
       setErrors((x) => ({ ...x, [item.deviceId!]: (e as Error).message }));
     } finally {
@@ -67,7 +71,7 @@ export function NearbyPanel() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ address: address.trim() }),
       });
-      setAddressMessage("Connected. It appears in the list when the link is up.");
+      setAddressMessage("Connection started. It appears in the list when the link is up.");
       setAddress("");
     } catch (e) {
       setAddressMessage((e as Error).message);
@@ -87,6 +91,8 @@ export function NearbyPanel() {
       </div>
       {item.state === "CONNECTED" ? (
         <span className="state-connected">Connected</span>
+      ) : item.peerConnected ? (
+        <span title="This address is an alternative candidate. The active link is listed separately.">Alternative address</span>
       ) : item.relay ? (
         <button
           className="button"
@@ -100,26 +106,20 @@ export function NearbyPanel() {
     </div>
   );
   return (
-    <section className="nearby" aria-label="Nearby devices">
+    <section className={`nearby${embedded ? " nearby-embedded" : ""}`} aria-label="Nearby devices">
       <div className="nearby-head">
-        <Eyebrow>NEARBY DEVICES</Eyebrow>
-        <button
+        <Eyebrow>{method === "lan" ? "RELAY PEERS ON THIS NETWORK" : method === "bluetooth" ? "BLUETOOTH DISCOVERY" : "NEARBY DEVICES"}</Eyebrow>
+        {method !== "lan" && <button
           className="button scan-button"
           onClick={scan}
-          disabled={nearby.scanning || !nearby.bluetoothAvailable}
-          title={nearby.bluetoothAvailable ? "" : "Bluetooth is not available on this device"}
+          disabled={isScanning || !canScan}
+          title={canScan ? "" : "Bluetooth is not available on this device"}
         >
-          {nearby.scanning ? "Scanning…" : "Scan now"}
-        </button>
+          {isScanning ? "Scanning…" : method === "bluetooth" ? "Scan Bluetooth" : "Scan now"}
+        </button>}
       </div>
       <small className="hint">
-        {nearby.scanning
-          ? "Looking for Bluetooth devices (about 8 seconds)…"
-          : nearby.lastScanAt
-            ? `Last scan ${new Date(nearby.lastScanAt).toLocaleTimeString()}`
-            : nearby.bluetoothAvailable
-              ? "No scan yet. Scans also run automatically."
-              : "Bluetooth is not available here; showing devices found on your network."}
+        {method === "lan" ? "Relay peers announce themselves automatically on this network." : isScanning ? "Looking for nearby Bluetooth devices…" : nearby.lastScanAt ? `Last Bluetooth scan ${new Date(nearby.lastScanAt).toLocaleTimeString()}` : canScan ? "Scan to find nearby Bluetooth devices running Relay." : "Bluetooth discovery is currently unavailable."}
       </small>
       {scanError && (
         <p role="alert" className="field-error">
@@ -130,9 +130,7 @@ export function NearbyPanel() {
         {actionable.map((item) => row(item))}
         {!actionable.length && (
           <p className="empty">
-            {nearby.items.length
-              ? "No Relay devices nearby yet. Ask the other person to make their device visible (select it on their map), then scan again."
-              : "No devices found yet. Press Scan now."}
+            {method === "lan" ? "No Relay peers detected on this local network yet." : "No Relay Bluetooth devices found. Make the other Relay device visible, then scan again."}
           </p>
         )}
       </div>
@@ -144,7 +142,7 @@ export function NearbyPanel() {
           <div className="nearby-list">{others.map((item) => row(item))}</div>
         </details>
       )}
-      <details className="by-address">
+      {method !== "bluetooth" && <details className="by-address">
         <summary>Connect by address</summary>
         <p className="hint">For a device on your network: its address and mesh port, for example 192.168.1.20:7000.</p>
         <div className="name-row">
@@ -160,7 +158,7 @@ export function NearbyPanel() {
           </button>
         </div>
         {addressMessage && <p className="hint">{addressMessage}</p>}
-      </details>
+      </details>}
     </section>
   );
 }
@@ -209,7 +207,7 @@ export function VisibilityCard() {
           </p>
         )}
         <p className="hint">
-          Change the name others see in <Link href="/device/">My device</Link>.
+          Change the name others see in <Link href="/settings/#my-device">Settings → My device</Link>.
         </p>
       </div>
     </div>
@@ -219,14 +217,14 @@ export function VisibilityCard() {
 /** Shown when a discovered (not yet connected) device is selected on the map. */
 export function ConnectCard({ id, fallbackName }: { id: string; fallbackName: string }) {
   const { nearby, connectNearby } = useMesh();
-  const item = nearby.items.find((i) => i.deviceId === id);
+  const item = nearby.items.find((i) => i.deviceId === id && i.state === "CONNECTED") || nearby.items.find((i) => i.deviceId === id);
   const [busy, setBusy] = useState(false),
     [error, setError] = useState("");
   async function connect() {
     setBusy(true);
     setError("");
     try {
-      await connectNearby(id);
+      await connectNearby(id, item?.address);
     } catch (e) {
       setError((e as Error).message);
     } finally {

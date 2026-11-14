@@ -14,6 +14,7 @@ public final class BluetoothScanner implements AutoCloseable {
     private final BluetoothDiscovery discovery;
     private final TopologyController topology;
     private final String localDeviceId;
+    private final String meshId;
     private final Duration scanDuration;
     private final Duration interval;
     private final Object lock = new Object();
@@ -27,6 +28,11 @@ public final class BluetoothScanner implements AutoCloseable {
 
     public BluetoothScanner(BluetoothDiscovery discovery, TopologyController topology, String localDeviceId,
                             Duration scanDuration, Duration interval) {
+        this(discovery, topology, localDeviceId, scanDuration, interval, null);
+    }
+    public BluetoothScanner(BluetoothDiscovery discovery, TopologyController topology, String localDeviceId,
+                            Duration scanDuration, Duration interval, String meshId) {
+        this.meshId = meshId;
         this.discovery = discovery;
         this.topology = topology;
         this.localDeviceId = localDeviceId;
@@ -83,6 +89,7 @@ public final class BluetoothScanner implements AutoCloseable {
             lastScan = List.copyOf(found);
             lastError = "";
             for (Nearby device : found) {
+                if (meshId != null && !device.meshId().filter(meshId::equals).isPresent()) continue;
                 device.relayDeviceId()
                         .filter(id -> !id.equals(localDeviceId))
                         .ifPresent(id -> topology.offer(new Candidate(id,

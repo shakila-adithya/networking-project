@@ -1,6 +1,5 @@
 package storage.transport;
 
-import storage.cluster.ReplicationManager;
 import storage.files.FileMetadata;
 import storage.files.HashUtils;
 import storage.files.InventoryJson;
@@ -12,6 +11,7 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
 import java.net.InetSocketAddress;
+import java.net.InetAddress;
 import java.net.Socket;
 import java.nio.file.AtomicMoveNotSupportedException;
 import java.nio.file.FileAlreadyExistsException;
@@ -37,6 +37,32 @@ public final class PeerClient {
 
     static {
         TIMEOUTS.setRemoveOnCancelPolicy(true);
+    }
+
+    private static final ThreadLocal<storage.security.MeshSecurity> SECURITY = new ThreadLocal<>();
+    @FunctionalInterface public interface IOCall<T> { T call() throws IOException; }
+    /** Explicit per-operation credentials; never shared between concurrent devices or returned by an API. */
+    public static <T> T authenticated(storage.security.MeshSecurity security, IOCall<T> operation) throws IOException {
+        var previous = SECURITY.get();
+        SECURITY.set(java.util.Objects.requireNonNull(security));
+        try { return operation.call(); }
+        finally { if (previous == null) SECURITY.remove(); else SECURITY.set(previous); }
+    }
+    private static final class AuthenticatedSocket extends Socket {
+        private final Socket carrier;
+        private final InputStream input;
+        private final OutputStream output;
+        AuthenticatedSocket(Socket carrier, storage.security.MeshSecurity security) throws IOException {
+            this.carrier = carrier;
+            Link raw = new FramedStreamLink(carrier.getInputStream(), carrier.getOutputStream(), carrier,
+                    carrier.getRemoteSocketAddress().toString());
+            Link encrypted = security.authenticate(raw, true, "file-service");
+            input = storage.security.LinkStreams.input(encrypted);
+            output = storage.security.LinkStreams.output(encrypted);
+        }
+        @Override public InputStream getInputStream() { return input; }
+        @Override public OutputStream getOutputStream() { return output; }
+        @Override public synchronized void close() throws IOException { carrier.close(); }
     }
 
     private PeerClient() {
@@ -141,85 +167,19 @@ public final class PeerClient {
         String fileName = normalizedSource.getFileName().toString();
         FileMetadata metadata = new FileMetadata(fileId, fileName, size,
                 HashUtils.sha256(normalizedSource), Instant.now().toString());
-        return sendUpload(host, port, normalizedSource, metadata, "PUT", true);
+        return sendUpload(host, port, normalizedSource, metadata);
     }
 
-    public static TransferResult uploadReplica(String host, int port, FileMetadata metadata, Path source)
+    public static TransferResult deliver(String host, int port, FileMetadata metadata, Path source)
             throws IOException {
         Path normalizedSource = source.toAbsolutePath().normalize();
         if (!Files.isRegularFile(normalizedSource)) {
-            throw new IOException("replica source is not a regular file: " + source);
+            throw new IOException("delivery source is not a regular file: " + source);
         }
         if (Files.size(normalizedSource) != metadata.size()) {
-            throw new IOException("replica source size does not match metadata");
+            throw new IOException("delivery source size does not match metadata");
         }
-        return sendUpload(host, port, normalizedSource, metadata, "REPLICA_PUT", false);
-    }
-
-    public static TransferResult replicateFromPeer(ReplicationManager.PeerEndpoint source,
-                                            ReplicationManager.PeerEndpoint destination,
-                                            FileMetadata expected) throws IOException {
-        try (Socket sourceSocket = connect(source.host(), source.port());
-             InputStream sourceInput = new BufferedInputStream(sourceSocket.getInputStream());
-             Socket destinationSocket = connect(destination.host(), destination.port());
-             InputStream destinationInput = new BufferedInputStream(destinationSocket.getInputStream());
-             OutputStream destinationOutput = new BufferedOutputStream(destinationSocket.getOutputStream())) {
-            try (SocketDeadline ignored = SocketDeadline.after(transferTimeoutMillis(expected.size()),
-                    sourceSocket, destinationSocket)) {
-            OutputStream sourceOutput = new BufferedOutputStream(sourceSocket.getOutputStream());
-            Protocol.writeLine(sourceOutput, "GET " + expected.fileId());
-            String sourceResponse = Protocol.readLine(sourceInput);
-            TransferResult sourceError = parseError(sourceResponse, expected.fileId());
-            if (sourceError != null) {
-                return sourceError;
-            }
-            if (sourceResponse == null || !sourceResponse.startsWith("FILE ")) {
-                throw new IOException("unexpected source response: " + sourceResponse);
-            }
-            int metadataLength = parseMetadataLength(sourceResponse.substring(5));
-            FileMetadata actual;
-            try {
-                actual = MetadataJson.decode(Protocol.readExactly(sourceInput, metadataLength));
-            } catch (Protocol.ProtocolException e) {
-                throw new IOException(e.getMessage(), e);
-            }
-            if (!expected.equals(actual)) {
-                return TransferResult.failure("METADATA_CONFLICT",
-                        "source metadata does not match the inventory snapshot", expected.fileId());
-            }
-
-            byte[] metadataJson = MetadataJson.encode(expected);
-            Protocol.writeLine(destinationOutput, "REPLICA_PUT " + metadataJson.length);
-            destinationOutput.write(metadataJson);
-            destinationOutput.flush();
-            String readiness = Protocol.readLine(destinationInput);
-            TransferResult rejected = parseError(readiness, expected.fileId());
-            if (rejected != null) {
-                return rejected;
-            }
-            if (!"READY".equals(readiness)) {
-                throw new IOException("unexpected replica readiness response: " + readiness);
-            }
-
-            MessageDigest digest = HashUtils.sha256Digest();
-            Protocol.copyExactly(sourceInput, destinationOutput, expected.size(), digest);
-            destinationOutput.flush();
-            if (!expected.sha256().equals(HashUtils.toHex(digest.digest()))) {
-                return TransferResult.failure("HASH_MISMATCH",
-                        "source content failed SHA-256 verification", expected.fileId());
-            }
-            String response = Protocol.readLine(destinationInput);
-            rejected = parseError(response, expected.fileId());
-            if (rejected != null) {
-                return rejected;
-            }
-            String expectedResponse = "OK STORED " + expected.fileId();
-            if (expectedResponse.equals(response)) {
-                return TransferResult.success("replica stored successfully", expected.fileId());
-            }
-            throw new IOException("unexpected replica response: " + response);
-            }
-        }
+        return sendUpload(host, port, normalizedSource, metadata);
     }
 
     private static long transferTimeoutMillis(long bytes) {
@@ -257,8 +217,7 @@ public final class PeerClient {
     }
 
     private static TransferResult sendUpload(String host, int port, Path source,
-                                             FileMetadata metadata, String command,
-                                             boolean acceptReplicationWarning) throws IOException {
+                                             FileMetadata metadata) throws IOException {
         byte[] metadataJson = MetadataJson.encode(metadata);
         if (metadataJson.length > Protocol.MAX_METADATA_SIZE) {
             throw new IOException("metadata exceeds protocol limit");
@@ -267,7 +226,7 @@ public final class PeerClient {
         try (Socket socket = connect(host, port);
              InputStream input = new BufferedInputStream(socket.getInputStream());
              OutputStream output = new BufferedOutputStream(socket.getOutputStream())) {
-            Protocol.writeLine(output, command + " " + metadataJson.length);
+            Protocol.writeLine(output, "PUT " + metadataJson.length);
             output.write(metadataJson);
             output.flush();
 
@@ -293,12 +252,6 @@ public final class PeerClient {
             String expected = "OK STORED " + metadata.fileId();
             if (expected.equals(response)) {
                 return TransferResult.success("stored successfully", metadata.fileId());
-            }
-            String warningPrefix = expected + " REPLICATION_FAILED ";
-            if (acceptReplicationWarning && response.startsWith(warningPrefix)) {
-                return TransferResult.storedWithWarning("REPLICATION_FAILED",
-                        "primary stored; replication failed: " + response.substring(warningPrefix.length()),
-                        metadata.fileId());
             }
             throw new IOException("unexpected upload response: " + response);
         }
@@ -370,11 +323,14 @@ public final class PeerClient {
 
     private static Socket connect(String host, int port,
                                   int connectTimeoutMillis, int readTimeoutMillis) throws IOException {
+        InetAddress address = InetAddress.getByName(host);
+        if (SECURITY.get() == null && !address.isLoopbackAddress())
+            throw new IOException("Unauthenticated file clients may only use loopback protocol fixtures. Configure mesh authentication; update old peers.");
         Socket socket = new Socket();
         try {
-            socket.connect(new InetSocketAddress(host, port), connectTimeoutMillis);
+            socket.connect(new InetSocketAddress(address, port), connectTimeoutMillis);
             socket.setSoTimeout(readTimeoutMillis);
-            return socket;
+            return SECURITY.get() == null ? socket : new AuthenticatedSocket(socket, SECURITY.get());
         } catch (IOException e) {
             socket.close();
             throw e;

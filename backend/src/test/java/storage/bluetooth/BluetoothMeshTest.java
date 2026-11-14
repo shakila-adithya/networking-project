@@ -47,7 +47,8 @@ class BluetoothMeshTest {
     private Device device(String id, String address) throws Exception {
         AodvRouter router = new AodvRouter(LinkCost.HOP_COUNT, Duration.ofMillis(300), 3, Duration.ofSeconds(60));
         BluetoothTransport transport = new BluetoothTransport(air.device(address), address, BluetoothTransport.DEFAULT_CHANNEL);
-        MeshNode node = new MeshNode(id, transport, router);
+        MeshNode node = new MeshNode(id, new storage.security.SecureTransport(transport,
+                new storage.security.MeshSecurity("fake-radio-mesh", "fake-radio-test-password")), router);
         node.start();
         FileStore store = new FileStore(tmp.resolve("store-" + id));
         MeshFileService files = new MeshFileService(node, store, new TransferConfig(8192, 8,

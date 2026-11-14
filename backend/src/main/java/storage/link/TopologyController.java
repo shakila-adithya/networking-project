@@ -52,7 +52,13 @@ public final class TopologyController implements AutoCloseable {
     private final TopologyPolicy policy;
     private final Supplier<Set<String>> reachable;
     private final LongSupplier clock;
-    private final Map<String, Entry> candidates = new HashMap<>();
+    private record CandidateKey(String deviceId, String address) { }
+
+    private final Map<CandidateKey, Entry> candidates = new HashMap<>();
+
+    private static CandidateKey key(Candidate candidate) {
+        return new CandidateKey(candidate.deviceId(), candidate.address());
+    }
     private final Object wakeLock = new Object();
     private boolean wakeRequested;
     private volatile boolean running;
@@ -85,14 +91,10 @@ public final class TopologyController implements AutoCloseable {
         if (candidate.deviceId().equals(node.localId())) {
             return;
         }
-        Entry entry = candidates.get(candidate.deviceId());
+        Entry entry = candidates.get(key(candidate));
         if (entry == null) {
-            candidates.put(candidate.deviceId(), new Entry(candidate, expiresAt));
+            candidates.put(key(candidate), new Entry(candidate, expiresAt));
         } else {
-            if (!entry.candidate.address().equals(candidate.address())) {
-                entry.failures = 0;
-                entry.nextAttemptAt = 0;
-            }
             entry.candidate = candidate;
             entry.expiresAt = Math.max(entry.expiresAt == PERMANENT ? PERMANENT : expiresAt, entry.expiresAt);
         }
@@ -104,19 +106,28 @@ public final class TopologyController implements AutoCloseable {
      * automatic dials, so a failure shows its reason and the periodic task backs off instead of retrying at once.
      */
     public void connectNow(String deviceId) throws IOException {
+        connectNow(deviceId, null);
+    }
+
+    /** When an address is selected, only connect to that observed candidate. */
+    public void connectNow(String deviceId, String address) throws IOException {
         Candidate candidate;
         synchronized (this) {
-            Entry entry = candidates.get(deviceId);
-            if (entry == null) {
-                throw new IOException("unknown device " + deviceId + ": scan again to find it");
-            }
-            candidate = entry.candidate;
+            candidate = candidates.values().stream()
+                    .filter(entry -> entry.candidate.deviceId().equals(deviceId))
+                    .filter(entry -> address == null || entry.candidate.address().equals(address))
+                    .sorted(Comparator.comparingInt((Entry entry) -> entry.failures)
+                            .thenComparing(Comparator.comparingInt((Entry entry) -> entry.candidate.signal()).reversed())
+                            .thenComparing(entry -> entry.candidate.address()))
+                    .map(entry -> entry.candidate).findFirst()
+                    .orElseThrow(() -> new IOException("unknown device or address: scan again to find it"));
         }
         if (node.neighbourIds().contains(deviceId)) {
-            return; // already connected
+            if (address != null) throw new IOException("Already connected to this device. Disconnecting or switching links is not supported yet.");
+            return;
         }
         try {
-            node.connectTo(candidate.address());
+            node.connectTo(candidate.address(), candidate.deviceId());
             recordSuccess(candidate);
         } catch (IOException | RuntimeException e) {
             recordFailure(candidate, String.valueOf(e.getMessage()));
@@ -131,7 +142,8 @@ public final class TopologyController implements AutoCloseable {
         Set<String> neighbours = node.neighbourIds();
         List<CandidateStatus> result = new ArrayList<>();
         for (Entry entry : candidates.values()) {
-            result.add(new CandidateStatus(entry.candidate, neighbours.contains(entry.candidate.deviceId()),
+            result.add(new CandidateStatus(entry.candidate, entry.candidate.address().equals(
+                    node.neighbourAddresses().get(entry.candidate.deviceId())),
                     entry.failures, entry.lastError));
         }
         result.sort(Comparator.comparing(item -> item.candidate().deviceId()));
@@ -181,7 +193,7 @@ public final class TopologyController implements AutoCloseable {
                 return;
             }
             try {
-                node.connectTo(candidate.address());
+                node.connectTo(candidate.address(), candidate.deviceId());
                 recordSuccess(candidate);
             } catch (IOException | RuntimeException e) {
                 recordFailure(candidate, String.valueOf(e.getMessage()));
@@ -190,7 +202,7 @@ public final class TopologyController implements AutoCloseable {
     }
 
     private synchronized void recordSuccess(Candidate candidate) {
-        Entry entry = candidates.get(candidate.deviceId());
+        Entry entry = candidates.get(key(candidate));
         if (entry != null) {
             entry.lastError = "";
             // The link registers asynchronously after HELLO. Until then it counts toward the link cap
@@ -202,7 +214,7 @@ public final class TopologyController implements AutoCloseable {
     }
 
     private synchronized void recordFailure(Candidate candidate, String error) {
-        Entry entry = candidates.get(candidate.deviceId());
+        Entry entry = candidates.get(key(candidate));
         if (entry == null) {
             return;
         }
@@ -224,12 +236,13 @@ public final class TopologyController implements AutoCloseable {
         Set<String> known = new HashSet<>(reachableIds);
         known.addAll(neighbours);
 
-        int inFlight = 0;
+        Set<String> pendingPeers = new HashSet<>();
         for (Entry entry : candidates.values()) {
             if (entry.pendingUntil > now && !neighbours.contains(entry.candidate.deviceId())) {
-                inFlight++;
+                pendingPeers.add(entry.candidate.deviceId());
             }
         }
+        int inFlight = pendingPeers.size();
         List<Candidate> bridges = new ArrayList<>();
         List<Candidate> redundant = new ArrayList<>();
         for (Entry entry : candidates.values()) {
@@ -239,28 +252,33 @@ public final class TopologyController implements AutoCloseable {
                 entry.lastError = "";
                 continue;
             }
-            if (entry.nextAttemptAt > now) {
+            if (entry.nextAttemptAt > now || pendingPeers.contains(id)) {
                 continue;
             }
             (known.contains(id) ? redundant : bridges).add(entry.candidate);
         }
         Comparator<Candidate> strongestFirst = Comparator.comparingInt(Candidate::signal).reversed()
-                .thenComparing(Candidate::deviceId);
+                .thenComparing(Candidate::deviceId).thenComparing(Candidate::address);
         bridges.sort(strongestFirst);
         redundant.sort(strongestFirst);
 
         int degree = neighbours.size() + inFlight;
         int free = policy.maxLinks() - degree;
         List<Candidate> chosen = new ArrayList<>();
+        Set<String> chosenPeers = new HashSet<>();
         for (Candidate candidate : bridges) {
-            if (chosen.size() < free && strongEnough(candidate, degree + chosen.size())) {
+            if (chosen.size() < free && !chosenPeers.contains(candidate.deviceId())
+                    && strongEnough(candidate, degree + chosen.size())) {
                 chosen.add(candidate);
+                chosenPeers.add(candidate.deviceId());
             }
         }
         for (Candidate candidate : redundant) {
             int projected = degree + chosen.size();
-            if (projected < policy.targetLinks() && chosen.size() < free && strongEnough(candidate, projected)) {
+            if (projected < policy.targetLinks() && chosen.size() < free
+                    && !chosenPeers.contains(candidate.deviceId()) && strongEnough(candidate, projected)) {
                 chosen.add(candidate);
+                chosenPeers.add(candidate.deviceId());
             }
         }
         return chosen;

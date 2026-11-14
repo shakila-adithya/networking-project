@@ -1,6 +1,6 @@
 package storage.config;
 
-import storage.cluster.ReplicationManager;
+import storage.cluster.PeerEndpoint;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 
@@ -36,9 +36,9 @@ class PeerConfigurationTest {
         assertEquals("192.168.50.11", loaded.advertisedAddress());
         assertEquals(Path.of("data/B"), loaded.storagePath());
         assertEquals(List.of(
-                new ReplicationManager.PeerEndpoint("A", "192.168.50.10", 6100),
-                new ReplicationManager.PeerEndpoint("B", "192.168.50.11", 6101),
-                new ReplicationManager.PeerEndpoint("C", "192.168.50.12", 6102)),
+                new PeerEndpoint("A", "192.168.50.10", 6100),
+                new PeerEndpoint("B", "192.168.50.11", 6101),
+                new PeerEndpoint("C", "192.168.50.12", 6102)),
                 loaded.peerEndpoints());
     }
 
@@ -88,14 +88,15 @@ class PeerConfigurationTest {
     }
 
     @Test
-    void discoveryModeAllowsSinglePeerButStaticModeStillRequiresTwo() {
+    void discoveryAndStaticModesAllowSinglePeer() {
         List<PeerConfiguration.PeerDefinition> onlyA = List.of(
                 new PeerConfiguration.PeerDefinition("A", "192.168.80.10", 6700));
         PeerConfiguration discovery = new PeerConfiguration("A", "0.0.0.0", "192.168.80.10", 6700,
                 "data/A", onlyA, "cluster", true, "239.255.42.99", 45555,
                 "0123456789abcdef");
         assertEquals(1, discovery.peerEndpoints().size());
-        assertThrows(IllegalArgumentException.class, () -> new PeerConfiguration("A", "0.0.0.0",
-                "192.168.80.10", 6700, "data/A", onlyA));
+        PeerConfiguration standalone = new PeerConfiguration("A", "0.0.0.0",
+                "192.168.80.10", 6700, "data/A", onlyA);
+        assertEquals(1, standalone.peerEndpoints().size());
     }
 }

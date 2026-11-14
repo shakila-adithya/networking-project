@@ -28,15 +28,12 @@ Keep the terminal open. Open **http://localhost:6080** on that computer. No sepa
 
 ## Join the existing cluster
 
-1. Open Settings → Join existing cluster.
-2. Enter a unique peer ID, such as C. Never reuse another active device's ID.
-3. Enter the existing cluster ID and shared discovery secret. Obtain these from the cluster operator separately; they are intentionally not included in this ZIP.
-4. Select the detected local Wi-Fi/Ethernet network shared with the cluster. Keep the suggested available TCP and REST ports.
-5. Match the existing cluster's multicast group and discovery UDP port.
-6. Select Validate settings, Apply configuration, then Restart local node with saved configuration.
-7. Wait for CONNECTED and confirm the existing devices have ALIVE status with verified heartbeats.
+1. Open the Network map on this device and switch to the live network.
+2. Select Scan meshes, choose the mesh and enter its password. Names are unverified until authentication succeeds.
+3. Accept any operating-system Bluetooth pairing prompts. Watch the map for authenticated active links.
+4. To enter known settings manually, use Settings → Advanced settings → Set up a mesh manually. Choose a unique Device ID and use the same mesh name and password as the other members. Select Save manual settings and reconnect.
 
-A and B must already be running with authenticated discovery enabled. Java may require permission on the Windows Private network for the selected peer TCP port and discovery UDP port. The application does not change firewall settings. Some guest networks/hotspots block multicast or isolate devices; use a LAN that supports peer communication. See `docs/join-device-C.md` for troubleshooting.
+All devices must run the updated authenticated protocol. Allow Relay or Java through the firewall on your trusted local network when prompted. Some guest Wi-Fi networks isolate devices. See `docs/join-device-C.md` for troubleshooting.
 
 Configuration is saved locally to `backend/config/local-setup.json`; it is created by setup and must not be shared. Files uploaded on this computer are stored under `backend/storage-data/<peer-id>`.
 
