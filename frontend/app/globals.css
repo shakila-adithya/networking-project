@@ -1299,16 +1299,13 @@ hr {
 .settings-facts { display: grid; grid-template-columns: 1fr 1fr; width: 100%; padding: 18px 0; margin: 0 0 18px; gap: 16px; border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); }
 .settings-facts dt { font-size: 11px; color: var(--muted); margin-bottom: 6px; }
 .settings-facts dd { margin: 0; font-size: 13px; overflow-wrap: anywhere; }
-.settings-network, .settings-methods { grid-column: 1/-1; }
+.settings-network { grid-column: 1/-1; }
 .settings-card-head { display: flex; align-items: center; justify-content: space-between; gap: 18px; }
 .settings-network > p { max-width: 760px; margin: 8px 0 20px; }
 .settings-network-row { display: flex; gap: 12px; margin-top: 9px; }
 .settings-network-row select { flex: 1; }
 .settings-network-row .button { flex-shrink: 0; }
 .settings-page .settings-help { font-size: 11px; margin: 14px 0 0; }
-.settings-methods { display: flex; align-items: center; gap: 30px; justify-content: space-between; }
-.settings-methods > div { max-width: 650px; }
-.settings-methods .button { flex-shrink: 0; }
 .settings-notice { border: 1px solid #ffc76540; background: #ffc76508; color: var(--gold); border-radius: 12px; padding: 16px 20px; margin: 0 0 22px; font-size: 13px; line-height: 1.8; }
 .settings-page .settings-notice.bad { margin-top: 20px; border-color: #e79b9140; color: var(--red); background: #e79b9108; }
 .settings-page .settings-notice.good { margin-top: 20px; border-color: #a9ddb740; color: var(--green); background: #a9ddb708; }
@@ -1338,7 +1335,7 @@ hr {
   .settings-page { padding: 28px 18px 48px; }
   .settings-grid { grid-template-columns: 1fr; gap: 16px; }
   .settings-card { padding: 22px; }
-  .settings-card-head, .settings-methods { align-items: flex-start; flex-direction: column; gap: 16px; }
+  .settings-card-head { align-items: flex-start; flex-direction: column; gap: 16px; }
   .settings-network-row { flex-direction: column; }
   .settings-form-grid { grid-template-columns: 1fr; }
   .settings-page .my-device.embedded { padding: 0; }
@@ -2239,3 +2236,15 @@ hr {
   .map-key-items { gap: 9px 14px; }
   .map-key-items > span { font-size: 10px; }
 }
+
+.settings-network-note { border-left: 2px solid var(--gold); padding: 10px 14px; background: #ffc76508; border-radius: 0 9px 9px 0; }
+#mesh-membership { scroll-margin-top: 24px; }
+
+.settings-detected-connections { display: flex; flex-wrap: wrap; gap: 8px; list-style: none; padding: 0; margin: 16px 0; }
+.settings-detected-connections li { padding: 10px 14px; background: var(--bg); border: 1px solid var(--line); border-radius: 9px; color: var(--text); font-size: 12px; overflow-wrap: anywhere; }
+
+.settings-network .settings-card-head { align-items: flex-start; }
+.settings-network .settings-card-head h2 { margin-top: 0; }
+.settings-network .settings-card-head p { max-width: 620px; margin: 6px 0 0; }
+.settings-network .settings-card-head > .button { flex-shrink: 0; }
+.settings-network-form { margin-top: 22px; }

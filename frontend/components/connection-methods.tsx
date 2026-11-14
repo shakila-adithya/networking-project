@@ -82,8 +82,8 @@ export function ConnectionMethods(props: Props) {
         {props.showPeers && <NearbyPanel method="bluetooth" embedded onScan={props.scanBluetooth} scanAvailable={preview || !!bluetoothAvailable} scanning={props.scanning} />}
       </>}
       {method === "lan" && <>
-        <div className="method-heading"><h4>Wi-Fi or Ethernet</h4><button className="button" disabled={preview || props.busy} onClick={() => void props.reload()}>Refresh networks</button></div>
-        <p className="method-help">Uses an existing local network. Connect to Wi-Fi or Ethernet in your system settings; Relay discovers members automatically.</p>
+        <div className="method-heading"><h4>Wi-Fi or Ethernet</h4><button className="button" disabled={preview || props.busy} onClick={() => void props.reload()}>Refresh connections</button></div>
+        <p className="method-help">Connect to Wi-Fi or Ethernet in your system settings. If you switch networks, select Refresh connections to update this list. Relay discovers members on that network.</p>
         <div className="local-network-list">{networks.map(network => <div className="local-network" key={network.address}><span className="network-address-mark" /><div><b>{network.label}</b><small>{network.address}</small></div></div>)}</div>
         {!networks.length && <p className="method-empty">No compatible local address detected. Connect Wi-Fi, Ethernet or a hotspot, then refresh.</p>}
         {!preview && (props.networksError || props.discoveryError) && <p className="connection-note">{props.networksError || props.discoveryError}<span>Bluetooth discovery is separate and may still be available.</span></p>}
