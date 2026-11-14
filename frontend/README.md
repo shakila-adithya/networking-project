@@ -4,9 +4,11 @@ For the complete UI join workflow, build this frontend and start `PeerNode --set
 
 Small React + Vite frontend for the existing Java storage system.
 
+Use Node.js 24. From the project root, `./run.sh` builds both parts and starts the UI/API host at http://localhost:6080.
+
 ```powershell
 cd frontend
-npm install
+npm ci
 npm run dev
 ```
 

@@ -1,12 +1,37 @@
 # Self-Healing Distributed Storage System
 
+## Quick start on Linux/macOS
+
+Use JDK 25 and Node.js 24 (`nvm install` reads `.nvmrc`). The Java version is also recorded in `.java-version`.
+
+```bash
+./run.sh
+```
+
+This installs the locked frontend dependencies, builds the UI, runs the Java tests, and starts the setup agent. Open **http://localhost:6080** and use **Settings** to configure or join a cluster. Keep the terminal running; press Ctrl+C to stop.
+
+For subsequent launches without rebuilding, use `./run.sh --no-build`. To use a different UI port, run `./run.sh --no-build -Dsetup.port=6085`.
+
+If a saved configuration refers to an old Wi-Fi address, open Settings, refresh the detected networks, choose the current address, apply, and restart the node. Existing files in `storage-data/` and saved settings in `config/local-setup.json` are preserved by the launcher. A second running peer is required for replication; a single peer can serve the UI but cannot provide redundant storage.
+
+To build and test without starting the app:
+
+```bash
+./mvnw clean verify
+npm --prefix frontend ci
+npm --prefix frontend run build
+```
+
+Multicast integration tests skip when the host does not support multicast on loopback. Static peer tests still exercise transfers, replication, failover, and recovery.
+
 For UI-based onboarding of a third laptop, see [Join device C through Settings](docs/join-device-C.md). Start the setup agent with `PeerNode --setup`; it serves the UI before a cluster configuration exists and persists settings separately from existing JSON configurations.
 
 Phase 6A adds validated external peer configuration for localhost and private LAN deployments. Phase 6B adds authenticated, optional LAN multicast discovery and dynamic membership. The JavaFX GUI remains deferred to later phases.
 
 ## Requirements
 
-- JDK 21 or newer
+- JDK 25 or newer
+- Node.js 24 for building the React frontend
 - PowerShell or another terminal
 
 The project includes a Maven Wrapper, so a separate Maven installation is not required.

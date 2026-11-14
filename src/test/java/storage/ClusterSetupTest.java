@@ -88,6 +88,12 @@ class ClusterSetupTest {
             } while (System.currentTimeMillis() < deadline);
             assertTrue(status.body().contains("\"phase\":\"ERROR\""));
             assertFalse(status.body().contains(SECRET));
+            // A failed start must release both ports so corrected settings can be applied.
+            try (var peerProbe = new ServerSocket(ports[0]);
+                 var restProbe = new ServerSocket(ports[1])) {
+                assertTrue(peerProbe.isBound());
+                assertTrue(restProbe.isBound());
+            }
         }
     }
     @Test void authenticatedDuplicateIdentityIsReported() throws Exception {

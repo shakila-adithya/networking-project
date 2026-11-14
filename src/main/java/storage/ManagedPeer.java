@@ -26,6 +26,9 @@ final class ManagedPeer implements AutoCloseable {
             // REST is internal to the setup agent. Browsers always use the agent's stable same-origin URL.
             rest = new RestApiServer("127.0.0.1", saved.restPort(), id, configuration.advertisedAddress(),
                     configuration.port(), server.fileStore(), heartbeat, replication);
+            // Start immediately so failure cleanup releases the bound HTTP port.
+            // HttpServer.stop() does not release a server that has never started.
+            rest.start();
             discovery = new DiscoveryManager(configuration, registry, peer -> heartbeat.refreshPeers(registry.endpoints()));
             registry.addListener(member -> heartbeat.refreshPeers(registry.endpoints()));
             heartbeat.addTransitionListener(transition -> registry.updateState(transition.peer().name(),
@@ -33,7 +36,6 @@ final class ManagedPeer implements AutoCloseable {
             server.start();
             discovery.start();
             heartbeat.start();
-            rest.start();
             healing.start();
             reconciliation.start();
         } catch (IOException | RuntimeException e) { close(); throw e; }
