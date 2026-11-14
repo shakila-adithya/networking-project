@@ -51,4 +51,21 @@ Use localhost on the device you are managing. Device, membership, radio, mesh an
 
 Allow peer TCP, mesh TCP (peer port + 2000) and UDP discovery 45556 on the intended private subnet. Do not disable the firewall. Guest-network/client isolation, VLANs, VPNs and multicast restrictions can prevent discovery or paths. Configure static peers/connect by address when suitable; authenticated connections are still required. No route is possible across a physical partition.
 
+### Windows Firewall and connectivity checks
+
+Allow only the needed ports from the trusted private subnet. Run PowerShell as Administrator and replace the subnet and ports (peer port `5000` is an example; mesh TCP is peer port + 2000). Do not disable Windows Firewall and do not use `RemoteAddress Any`:
+
+```powershell
+New-NetFirewallRule -DisplayName "Relay peer TCP" -Direction Inbound -Protocol TCP -LocalPort 5000,7000 -RemoteAddress 192.168.1.0/24 -Action Allow -Profile Private
+New-NetFirewallRule -DisplayName "Relay discovery UDP" -Direction Inbound -Protocol UDP -LocalPort 45556 -RemoteAddress 192.168.1.0/24 -Action Allow -Profile Private
+```
+
+Set the Windows network profile to **Private**, then from the other device test reachability before joining:
+
+```powershell
+Test-NetConnection 192.168.1.10 -Port 5000
+```
+
+`TcpTestSucceeded` must be `True`. If not, check that both devices are on the same private network, the address belongs to the Wi-Fi adapter, the port is listening, and the firewall rule matches the subnet. Relay never changes firewall settings itself.
+
 Verification details and the untested Linux/Windows hardware combinations are recorded in [offline-mesh-status.md](offline-mesh-status.md). Tests using loopback or fake radios do not demonstrate physical interoperability.
