@@ -63,6 +63,8 @@
                 <version>3.5.2</version>
                 <configuration>
                     <argLine>--enable-native-access=ALL-UNNAMED</argLine>
+                    <!-- Unit/integration tests inject storage keys; never create entries in the operator's OS keyring. -->
+                    <systemPropertyVariables><relay.storage.disabled>true</relay.storage.disabled></systemPropertyVariables>
                 </configuration>
             </plugin>
             <plugin>

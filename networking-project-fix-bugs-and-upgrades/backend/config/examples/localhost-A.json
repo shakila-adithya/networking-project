@@ -1,0 +1,12 @@
+{
+  "localPeerId": "A",
+  "bindAddress": "127.0.0.1",
+  "advertisedAddress": "127.0.0.1",
+  "port": 5000,
+  "storageDirectory": "storage-data/A",
+  "peers": [
+    { "id": "A", "address": "127.0.0.1", "port": 5000 },
+    { "id": "B", "address": "127.0.0.1", "port": 5001 },
+    { "id": "C", "address": "127.0.0.1", "port": 5002 }
+  ]
+}

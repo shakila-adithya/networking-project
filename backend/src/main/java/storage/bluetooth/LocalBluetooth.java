@@ -12,6 +12,9 @@ public interface LocalBluetooth extends BluetoothDiscovery, AutoCloseable {
 
     boolean isAdvertising();
 
+    /** Partial platform support must be reported even when the radio itself is available. */
+    default String discoveryLimitation() { return ""; }
+
     /** Makes this device visible with the public Relay/mesh tags where the platform allows it. */
     void advertise(String deviceId, String displayName, String meshId) throws IOException;
 

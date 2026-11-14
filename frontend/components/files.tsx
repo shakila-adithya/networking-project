@@ -27,7 +27,7 @@ function applyStatus(t: Transfer, s: TransferStatus): Transfer {
     return { ...t, state: "Delivered", progress: undefined, resumable: false, detail: `To ${peer}${sent}` };
   if (s.state === "FAILED")
     return { ...t, state: "Failed", progress: undefined, resumable: true, detail: s.error || "Transfer stopped" };
-  if (s.stalled)
+  if (s.stalled || s.state === "WAITING")
     return { ...t, state: "Waiting", progress: undefined, resumable: false, detail: `To ${peer} · waiting for a route · ${s.percent}% sent` };
   return { ...t, state: "Sending", progress: s.percent, resumable: false, detail: `To ${peer}${sent}` };
 }

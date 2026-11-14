@@ -303,6 +303,18 @@ async function mockNode(page: import("@playwright/test").Page, device: Device, n
     r.fulfill({ json: { deviceId: "C", deviceName: device.displayName, names: {}, transport: "tcp+bluetooth", neighbours: [], routes: [], inbox: [] } }),
   );
   const posts: { path: string; body: unknown }[] = [];
+  await page.route("**/api/membership", r => r.fulfill({ json: { meshId: "Community", phase: "DISCOVERING", nearby: [], bluetoothAvailable: true, scanning: false, error: "", discoveryError: "" } }));
+  await page.route("**/api/membership/scan", r => {
+    posts.push({ path: "/api/membership/scan", body: r.request().postDataJSON() });
+    return r.fulfill({ status: 202, json: { message: "Search started" } });
+  });
+  await page.route("**/api/radio", r => r.fulfill({ json: { available: false, state: "STOPPED", adapters: [], peers: [] } }));
+  const visibility = () => ({ deviceId: device.deviceId, visible: device.visible, displayName: device.customName, bluetoothAvailable: !!device.bluetooth.available, bluetoothReason: device.bluetooth.reason || "", phase: "DISCOVERING", error: "" });
+  await page.route("**/api/discovery", r => r.fulfill({ json: { devices: [], meshes: [], visibility: visibility() } }));
+  await page.route("**/api/visibility", r => {
+    const body = r.request().postDataJSON(); posts.push({ path: "/api/visibility", body }); device.visible = body.visible;
+    return r.fulfill({ json: visibility() });
+  });
   await page.route("**/api/device", async (r) => {
     if (r.request().method() === "POST") {
       const body = r.request().postDataJSON();
@@ -348,7 +360,7 @@ test("My device lets the user set the name and offers no visibility control", as
   await expect(page.locator(".device-identity small")).toContainText("Device ID");
   // visibility lives on the Network map, not here
   await expect(page.getByRole("switch")).toHaveCount(0);
-  await expect(page.getByText(/select your device/)).toBeVisible();
+  await expect(page.getByText(/use the visibility switch/)).toBeVisible();
 
   const save = page.getByRole("button", { name: "Save", exact: true });
   await expect(save).toBeDisabled(); // nothing changed yet
@@ -369,31 +381,31 @@ test("My device refuses a name that is too long and shows the node's error", asy
   expect(posts).toEqual([]);
 });
 
-test("visibility is switched on the network map by selecting your own device", async ({ page }) => {
+test("visibility is always available on the map and hiding warns that it leaves the mesh", async ({ page }) => {
   const device = { ...baseDevice, customName: "Maya's laptop", displayName: "Maya's laptop" };
   const posts = await mockNode(page, device);
   await page.goto("/");
-  await expect(page.getByRole("switch")).toHaveCount(0); // nothing selected: no visibility control
+  await expect(page.getByRole("switch")).toHaveCount(1); // no map selection is needed
   await page.getByRole("button", { name: "Inspect Maya's laptop" }).click();
   const toggle = page.getByRole("switch", { name: "Visible to nearby devices" });
   await expect(toggle).toHaveAttribute("aria-checked", "false");
-  await expect(page.getByText(/Hidden\. Nearby devices cannot find you/)).toBeVisible();
+  await expect(page.locator(".map-visibility").getByText("Hidden", { exact: true })).toBeVisible();
   await toggle.click();
   await expect(toggle).toHaveAttribute("aria-checked", "true");
-  await expect(page.getByText("Maya's laptop [relay:C]", { exact: false })).toBeVisible();
-  expect(posts).toEqual([{ path: "/api/device", body: { visible: true } }]);
+  await expect(page.getByText("Other Relay devices can find your device on their map.", { exact: true })).toBeVisible();
+  expect(posts).toEqual([{ path: "/api/visibility", body: { visible: true } }]);
   await toggle.click();
   await expect(toggle).toHaveAttribute("aria-checked", "false");
-  expect(posts.at(-1)).toEqual({ path: "/api/device", body: { visible: false } });
+  expect(posts.at(-1)).toEqual({ path: "/api/visibility", body: { visible: false } });
 });
 
-test("visibility is disabled with a reason when Bluetooth is unavailable", async ({ page }) => {
+test("visibility remains available for LAN when Bluetooth is unavailable", async ({ page }) => {
   const device = { ...baseDevice, transport: "tcp", bluetooth: { available: false, reason: "Bluetooth is turned off (adapter 28:11:A8:30:EA:39)" } };
   await mockNode(page, device);
   await page.goto("/");
   await page.getByRole("button", { name: "Inspect You" }).click();
-  await expect(page.getByRole("switch", { name: "Visible to nearby devices" })).toBeDisabled();
-  await expect(page.locator(".visibility-card").getByText(/Bluetooth is turned off/)).toBeVisible();
+  await expect(page.getByRole("switch", { name: "Visible to nearby devices" })).toBeEnabled();
+  await expect(page.locator(".map-visibility").getByText(/Bluetooth is turned off/)).toBeVisible();
 });
 
 test("nearby devices can be scanned, analysed and connected from the map", async ({ page }) => {
@@ -415,10 +427,10 @@ test("nearby devices can be scanned, analysed and connected from the map", async
   await expect(panel.getByText(/refused the connection/)).toBeVisible(); // the failure reason is shown
   await expect(panel.getByRole("button", { name: "Retry connecting to Dani" })).toBeVisible();
 
-  await panel.getByRole("button", { name: "Scan Bluetooth" }).click();
+  await page.getByRole("button", { name: "Scan nearby", exact: true }).click();
   await panel.getByRole("button", { name: "Connect to Basil's laptop" }).click();
   expect(posts).toEqual([
-    { path: "/api/bluetooth/scan", body: null },
+    { path: "/api/membership/scan", body: {} },
     { path: "/api/mesh/connect", body: { deviceId: "B", candidateAddress: "bt:AA:BB:CC:DD:EE:02" } },
   ]);
 });
@@ -445,7 +457,7 @@ test("the design preview works without a node: name, visibility, scan and connec
   await toggle.click();
   await expect(toggle).toHaveAttribute("aria-checked", "true");
   await page.getByRole("button", { name: "Reset inspector" }).click();
-  await page.getByRole("button", { name: "Scan Bluetooth" }).click();
+  await page.getByRole("button", { name: "Scan nearby", exact: true }).click();
   await expect(page.getByRole("button", { name: "Scanning…" })).toBeVisible();
   await page.getByRole("button", { name: "Connect to Zara" }).click();
   await expect(page.getByText("Connected", { exact: true }).nth(1)).toBeVisible();
@@ -463,6 +475,6 @@ test("selecting this device before its live ID loads keeps the visibility inspec
   await page.getByRole("button", { name: "Inspect You" }).click();
   await expect(page.getByRole("switch", { name: "Visible to nearby devices" })).toBeVisible();
   release();
-  await expect(page.locator(".visibility-card").getByText(/Bluetooth is turned off/)).toBeVisible();
-  await expect(page.getByRole("switch", { name: "Visible to nearby devices" })).toBeDisabled();
+  await expect(page.locator(".map-visibility").getByText(/Bluetooth is turned off/)).toBeVisible();
+  await expect(page.getByRole("switch", { name: "Visible to nearby devices" })).toBeEnabled();
 });

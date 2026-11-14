@@ -37,7 +37,7 @@ import java.util.stream.Stream;
 public final class MeshFileService implements AutoCloseable {
     private static final int MAX_CONCURRENT_INCOMING = 8;
     private static final int MAX_CHUNKS = 65_536;
-    private static final long INCOMING_IDLE_EXPIRY_MILLIS = 30 * 60_000L;
+    private static final long INCOMING_IDLE_EXPIRY_MILLIS = 24 * 60 * 60_000L;
     private static final int HISTORY_LIMIT = 200;
     private static final int COMPLETED_MEMORY = 200;
 
@@ -50,6 +50,10 @@ public final class MeshFileService implements AutoCloseable {
     private final Map<UUID, IncomingTransfer> incoming = new LinkedHashMap<>();
     private volatile Consumer<ReceivedFile> receivedListener = file -> { };
     private volatile boolean closed;
+    private final java.util.concurrent.ScheduledExecutorService retryTimer = java.util.concurrent.Executors.newSingleThreadScheduledExecutor(r -> {
+        Thread t = new Thread(r, "file-contact-retry"); t.setDaemon(true); return t;
+    });
+    private final class RetryTask implements Runnable { public void run() { if (!node.neighbourIds().isEmpty()) resumePending(); } }
 
     public MeshFileService(MeshNode node, FileStore store, TransferConfig config) throws IOException {
         this.node = node;
@@ -60,14 +64,51 @@ public final class MeshFileService implements AutoCloseable {
         this.incomingDirectory = work.resolve("incoming");
         Files.createDirectories(outgoingDirectory);
         Files.createDirectories(incomingDirectory);
-        // Transfer state lives in memory, so files left by an earlier run can never be resumed.
-        deleteContents(outgoingDirectory);
-        deleteContents(incomingDirectory);
+        // Journals, staging and bitmaps survive restarts. Never erase unacknowledged source bytes.
+        restoreTransfers();
         node.setHandler(MessageType.FILE_OFFER, this::onOffer);
         node.setHandler(MessageType.FILE_ACCEPT, this::onAccept);
         node.setHandler(MessageType.FILE_CHUNK, this::onChunk);
         node.setHandler(MessageType.FILE_CHUNK_ACK, this::onAck);
         node.setHandler(MessageType.FILE_DONE, this::onDone);
+        node.onNeighbourChange(peer -> resumePending(), peer -> { });
+        retryTimer.scheduleWithFixedDelay(new RetryTask(), 10, 30, java.util.concurrent.TimeUnit.SECONDS);
+    }
+    private record OutgoingJournal(UUID transferId, String to, FileMetadata metadata, int chunkSize) { }
+    private Path journal(OutgoingTransfer t) { return outgoingDirectory.resolve(t.transferId + ".json"); }
+    private void save(OutgoingTransfer t) throws IOException { storage.files.AtomicJson.save(journal(t), new OutgoingJournal(t.transferId, t.to, t.metadata, t.chunkSize)); }
+    private void restoreTransfers() throws IOException {
+        try (var list = Files.list(outgoingDirectory)) {
+            for (Path path : list.filter(p -> p.getFileName().toString().endsWith(".json")).limit(HISTORY_LIMIT).toList()) {
+                OutgoingJournal j = storage.files.AtomicJson.read(path, OutgoingJournal.class);
+                if (!path.getFileName().toString().equals(j.transferId() + ".json") || j.chunkSize() < 1024 || j.chunkSize() > TransferConfig.MAX_CHUNK_SIZE) throw new IOException("Invalid outgoing transfer journal");
+                Path bytes = outgoingDirectory.resolve(j.transferId() + ".bin");
+                if (!Files.isRegularFile(bytes) || Files.size(bytes) != j.metadata().size()) throw new IOException("Pending source bytes are missing or changed: " + j.transferId());
+                var t = new OutgoingTransfer(j.transferId(), j.to(), j.metadata(), bytes, j.chunkSize());
+                t.fail("paused after restart; waiting for a connection"); outgoing.put(j.transferId(), t);
+            }
+        }
+        try (var list = Files.list(incomingDirectory)) {
+            for (Path path : list.filter(p -> p.getFileName().toString().endsWith(".json")).limit(MAX_CONCURRENT_INCOMING).toList()) {
+                var j = storage.files.AtomicJson.read(path, IncomingTransfer.Journal.class);
+                if (!path.getFileName().toString().equals(j.transferId() + ".json") || j.chunkSize() < 1024 || j.chunkSize() > TransferConfig.MAX_CHUNK_SIZE) throw new IOException("Invalid incoming transfer journal");
+                Path bytes = incomingDirectory.resolve(j.transferId() + ".part");
+                if (!Files.isRegularFile(bytes)) continue;
+                var t = new IncomingTransfer(j.transferId(), j.from(), j.metadata(), j.chunkSize(), bytes); t.restore(j.received()); incoming.put(j.transferId(), t);
+            }
+        }
+    }
+    public void resumePending() {
+        if (closed) return;
+        int budget = 8;
+        for (OutgoingTransfer t : outgoing.values()) {
+            String reason = t.status(1000).error();
+            if ((t.state() == TransferState.WAITING || t.state() == TransferState.FAILED)
+                    && (reason.contains("route unavailable") || reason.startsWith("paused after restart"))) {
+                if (budget-- <= 0) break;
+                resume(t.transferId);
+            }
+        }
     }
 
     public void onReceived(Consumer<ReceivedFile> listener) {
@@ -93,6 +134,9 @@ public final class MeshFileService implements AutoCloseable {
         if (Files.size(source) != metadata.size()) {
             throw new IllegalArgumentException("file size does not match its metadata");
         }
+        trimHistory();
+        long pendingBytes = outgoing.values().stream().filter(t -> t.state() != TransferState.DELIVERED).mapToLong(t -> t.metadata.size()).sum();
+        if (outgoing.size() >= HISTORY_LIMIT || metadata.size() > 4L * 1024 * 1024 * 1024 - pendingBytes) throw new IOException("Pending-file storage limit reached. Existing pending files were kept.");
         UUID id = UUID.randomUUID();
         Path staging = outgoingDirectory.resolve(id + ".bin");
         Files.copy(source, staging, StandardCopyOption.REPLACE_EXISTING);
@@ -101,6 +145,7 @@ public final class MeshFileService implements AutoCloseable {
             Files.deleteIfExists(staging);
             throw new IllegalArgumentException("file needs too many chunks; use a larger chunk size");
         }
+        save(transfer);
         outgoing.put(id, transfer);
         trimHistory();
         start(transfer);
@@ -110,7 +155,7 @@ public final class MeshFileService implements AutoCloseable {
     /** Continues a FAILED transfer from the chunks the receiver already holds. Returns false if impossible. */
     public boolean resume(UUID transferId) {
         OutgoingTransfer transfer = outgoing.get(transferId);
-        if (closed || transfer == null || transfer.state() != TransferState.FAILED
+        if (closed || transfer == null || transfer.state() != TransferState.FAILED && transfer.state() != TransferState.WAITING
                 || !Files.isRegularFile(transfer.staging)) {
             return false;
         }
@@ -123,7 +168,10 @@ public final class MeshFileService implements AutoCloseable {
         return true;
     }
 
-    private void start(OutgoingTransfer transfer) {
+    private synchronized void start(OutgoingTransfer transfer) {
+        if (closed) return;
+        long active = outgoing.values().stream().filter(t -> t.thread() != null && t.thread().isAlive()).count();
+        if (active >= 8) { transfer.pause("paused after restart; waiting for a connection or worker slot"); return; }
         Thread worker = new Thread(new TransferTask(this, transfer, config), "file-send-" + transfer.transferId);
         worker.setDaemon(true);
         transfer.setThread(worker);
@@ -165,25 +213,28 @@ public final class MeshFileService implements AutoCloseable {
     }
 
     /** A transfer is shown as "waiting for a route" after a few unanswered chunk timeouts. */
+    boolean durable() { return node.durable(); }
     private long stallDisplayMillis() {
         return Math.max(1_000, config.chunkTimeout().toMillis() * 2);
     }
 
     void transferEnded(OutgoingTransfer transfer) {
         if (transfer.state() == TransferState.DELIVERED) {
+            deleteQuietly(journal(transfer));
+            if (node.custody() != null) node.custody().completedTransfer(transfer.transferId, transfer.to);
             deleteQuietly(transfer.staging);
         }
     }
 
     private void trimHistory() {
-        if (outgoing.size() <= HISTORY_LIMIT) {
+        if (outgoing.size() < HISTORY_LIMIT) {
             return;
         }
         for (OutgoingTransfer transfer : new ArrayList<>(outgoing.values())) {
-            if (outgoing.size() <= HISTORY_LIMIT) {
+            if (outgoing.size() < HISTORY_LIMIT) {
                 return;
             }
-            if (transfer.state() == TransferState.DELIVERED || transfer.state() == TransferState.FAILED) {
+            if (transfer.state() == TransferState.DELIVERED) {
                 outgoing.remove(transfer.transferId);
                 deleteQuietly(transfer.staging);
             }
@@ -244,6 +295,7 @@ public final class MeshFileService implements AutoCloseable {
             OutgoingTransfer transfer = outgoingFor(message, done.transferId());
             if (transfer != null) {
                 transfer.onDone(done.ok(), done.reason());
+                if (done.ok()) { transfer.markDelivered(); transferEnded(transfer); }
             }
         } catch (IOException e) {
             System.err.println("Dropped malformed FILE_DONE: " + e.getMessage());
@@ -323,6 +375,7 @@ public final class MeshFileService implements AutoCloseable {
                 try {
                     transfer = new IncomingTransfer(id, from, metadata, offer.chunkSize(),
                             incomingDirectory.resolve(id + ".part"));
+                    transfer.save();
                 } catch (IOException e) {
                     replyAccept(from, new TransferCodec.Accept(id, TransferCodec.REJECTED,
                             "cannot create the partial file: " + e.getMessage(), nothing));
@@ -356,6 +409,7 @@ public final class MeshFileService implements AutoCloseable {
             transfer = incoming.get(chunk.transferId());
         }
         if (transfer == null || !transfer.from.equals(message.source())) {
+            if (node.durable()) throw new IllegalStateException("Waiting for the file's offer metadata");
             return; // unknown transfer: the sender's offer retries will establish it
         }
         try {
@@ -364,6 +418,7 @@ public final class MeshFileService implements AutoCloseable {
             }
         } catch (IOException e) {
             System.err.println("Could not write chunk " + chunk.index() + ": " + e.getMessage());
+            if (node.durable()) throw new java.io.UncheckedIOException(e);
             return;
         }
         try {
@@ -407,6 +462,7 @@ public final class MeshFileService implements AutoCloseable {
             reason = "could not verify the file: " + e.getMessage();
         }
         deleteQuietly(transfer.part);
+        deleteQuietly(incomingDirectory.resolve(transfer.transferId + ".json"));
         transfer.complete(ok, reason);
         synchronized (incoming) {
             trimCompleted();
@@ -459,6 +515,8 @@ public final class MeshFileService implements AutoCloseable {
             if (!transfer.isCompleted() && transfer.idleMillis() > INCOMING_IDLE_EXPIRY_MILLIS) {
                 transfer.closeFile();
                 deleteQuietly(transfer.part);
+                deleteQuietly(incomingDirectory.resolve(transfer.transferId + ".json"));
+                System.err.println("Partial received transfer expired: " + transfer.transferId + "; sender retains original.");
                 return true;
             }
             return false;
@@ -489,17 +547,10 @@ public final class MeshFileService implements AutoCloseable {
         }
     }
 
-    private static void deleteContents(Path directory) throws IOException {
-        try (Stream<Path> children = Files.list(directory)) {
-            for (Path child : children.toList()) {
-                Files.deleteIfExists(child);
-            }
-        }
-    }
-
     @Override
     public void close() {
         closed = true;
+        retryTimer.shutdownNow();
         for (OutgoingTransfer transfer : outgoing.values()) {
             Thread worker = transfer.thread();
             if (worker != null) {
@@ -509,12 +560,8 @@ public final class MeshFileService implements AutoCloseable {
         synchronized (incoming) {
             for (IncomingTransfer transfer : incoming.values()) {
                 transfer.closeFile();
-                deleteQuietly(transfer.part);
             }
             incoming.clear();
-        }
-        for (OutgoingTransfer transfer : outgoing.values()) {
-            deleteQuietly(transfer.staging);
         }
     }
 }

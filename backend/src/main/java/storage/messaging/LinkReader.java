@@ -35,7 +35,7 @@ final class LinkReader implements Runnable {
             }
             if (expectedId != null && !expectedId.equals(hello.source()))
                 throw new IOException("Unverified discovery claimed " + expectedId + " but authenticated peer identifies as " + hello.source());
-            if (!node.register(hello.source(), link, initiatedLocally, MeshNode.decodeName(hello.payload()))) {
+            if (!node.register(hello.source(), link, initiatedLocally, node.helloName(hello.source(), hello.payload()))) {
                 if (node.neighbourIds().contains(hello.source())) outcome.complete(hello.source());
                 return; // duplicate link lost the tie-break, or node is closing
             }
@@ -45,7 +45,7 @@ final class LinkReader implements Runnable {
             byte[] frame;
             while ((frame = link.receive()) != null) {
                 try {
-                    node.receive(MessageCodec.decode(frame), remoteId);
+                    node.receive(MessageCodec.decode(frame), remoteId, link);
                 } catch (IOException malformed) {
                     System.err.println("Dropped malformed frame from " + remoteId + ": " + malformed.getMessage());
                 }

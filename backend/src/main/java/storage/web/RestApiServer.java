@@ -56,6 +56,10 @@ public final class RestApiServer implements AutoCloseable {
     private volatile MeshFileService meshFiles;
     private volatile Supplier<Map<String, Object>> bluetoothStatus = () -> null;
     private volatile DeviceApi deviceApi;
+    private boolean setupOwnsVisibility;
+
+    /** Setup owns leaving/persistence; the internal endpoint must not bypass that lifecycle. */
+    public void setupOwnsVisibility() { setupOwnsVisibility = true; }
     private final java.util.concurrent.ExecutorService executor = Executors.newVirtualThreadPerTaskExecutor();
 
     public RestApiServer(String bindAddress, int port, String localPeerId,
@@ -125,6 +129,10 @@ public final class RestApiServer implements AutoCloseable {
                 Map<?, ?> request = JSON.readValue(exchange.getRequestBody().readNBytes(4 * 1024), Map.class);
                 Object name = request.get("displayName");
                 Object visible = request.get("visible");
+                if (visible != null && setupOwnsVisibility) {
+                    sendError(exchange, 409, "USE_SETUP_VISIBILITY", "Change visibility on the Network map through the setup service; hiding also leaves your mesh.");
+                    return;
+                }
                 if ((name != null && !(name instanceof String)) || (visible != null && !(visible instanceof Boolean))) {
                     sendError(exchange, 400, "INVALID_DEVICE", "displayName must be text and visible must be true or false");
                     return;
@@ -186,6 +194,9 @@ public final class RestApiServer implements AutoCloseable {
                 body.put("deviceName", node.displayName().isEmpty() ? node.localId() : node.displayName());
                 body.put("names", node.names());
                 body.put("links", node.neighbourKinds());
+                body.put("carriers", node.carrierStatus());
+                body.put("topology", node.topologyStatus());
+                body.put("custody", node.custodyStatus());
                 body.put("linkAddresses", node.neighbourAddresses());
                 body.put("transport", meshTransport);
                 body.put("neighbours", new java.util.TreeSet<>(node.neighbourIds()));
@@ -193,6 +204,7 @@ public final class RestApiServer implements AutoCloseable {
                 Map<String, Object> bluetooth = bluetoothStatus.get();
                 if (bluetooth != null) body.put("bluetooth", bluetooth);
                 body.put("inbox", service.inbox());
+                body.put("historyError", service.historyError());
                 sendJson(exchange, 200, body);
             } else if (path.equals("/api/mesh/chat") && "POST".equalsIgnoreCase(method)) {
                 Map<?, ?> request = JSON.readValue(exchange.getRequestBody().readNBytes(16 * 1024), Map.class);

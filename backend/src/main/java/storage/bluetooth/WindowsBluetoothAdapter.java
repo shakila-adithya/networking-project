@@ -106,6 +106,9 @@ public final class WindowsBluetoothAdapter implements LocalBluetooth {
         }
     }
 
+    @Override public String discoveryLimitation() {
+        return "Windows radio discovery is available, but this Relay version cannot publish its Bluetooth service identity on Windows. Other Relay devices may not find this device over Bluetooth. Use a shared Wi-Fi/Ethernet network. Windows Bluetooth is not hardware-verified.";
+    }
     @Override public String address() { return address; }
     @Override public synchronized String name() { return radioName; }
     @Override public synchronized boolean isAdvertising() { return advertising; }

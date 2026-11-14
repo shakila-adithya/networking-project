@@ -7,7 +7,8 @@ package storage.discovery;
  * @param address  transport address to connect to (host:port for TCP; a Bluetooth address later)
  * @param signal   link quality hint from 0 (unusable) to 100 (excellent); use 50 when the carrier has none
  */
-public record Candidate(String deviceId, String address, int signal) {
+public record Candidate(String deviceId, String address, int signal, boolean signalMeasured) {
+    public Candidate(String deviceId, String address, int signal) { this(deviceId, address, signal, false); }
     public Candidate {
         if (deviceId == null || deviceId.isBlank() || address == null || address.isBlank()) {
             throw new IllegalArgumentException("deviceId and address are required");

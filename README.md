@@ -107,17 +107,17 @@ LAN announcements and Bluetooth mesh names are unverified hints. Password authen
 
 Heartbeat checks are scheduled every 2 seconds with a 5-second probe timeout and a threshold of 5 consecutive failures. Failed checks progress through `SUSPECTED` to `DEAD`; a successful check returns the peer to `ALIVE`. Detection time depends on network timeouts and completed probes.
 
-The topology controller maintains direct neighbours. AODV routing finds paths as needed and invalidates paths through lost links. A disconnected recipient cannot receive data unless another path exists. See [topology](docs/topology.md) and [routing](docs/routing.md).
+The topology controller maintains direct neighbours. AODV routing finds paths as needed and invalidates paths through lost links. Live delivery requires a physical path. With secure temporary storage available, pending data can also cross separate contacts using durable custody; the sender retains its original until final delivery. See [topology](docs/topology.md) and [routing](docs/routing.md).
 
-Bluetooth is enabled alongside TCP by default, with TCP fallback if Bluetooth is unavailable. Visibility starts off. Choose a display name in My device and enable visibility by selecting your own device on Network map. See [Bluetooth setup and hardware limitations](docs/bluetooth.md).
+Bluetooth is enabled alongside TCP by default, with TCP fallback if Bluetooth is unavailable. Visibility starts off. Choose a display name in Settings and use the visibility switch above the Network map. Hiding also leaves the mesh; showing again does not rejoin. See [Bluetooth setup and hardware limitations](docs/bluetooth.md).
 
 ## Messages and files
 
-Chat uses acknowledgements and bounded retries. Broadcast chat reports handing messages to neighbours rather than confirmed receipt by everyone. Chat history is held in memory.
+Chat uses acknowledgements and bounded retries. Broadcast chat reports handing messages to neighbours rather than confirmed receipt by everyone. When OS-protected storage is available, chat history and pending delivery state survive restart in an encrypted journal.
 
 File sharing supports one or multiple chosen recipients. The API also supports `recipient=all`, taking a snapshot of registered `ALIVE` peers plus this device. New arrivals are not retroactive recipients. Each recipient keeps their received file; sending to another single device does not keep a permanent received-file copy on the sender.
 
-The backend tries direct TCP delivery to registered peers, with mesh fallback. Routed transfers use acknowledged chunks, whole-file SHA-256 verification and progress/status reporting. Interrupted transfers may be manually resumed while their staged data and in-memory state remain available. This is temporary transfer state, not permanent backup storage. See [file sharing](docs/file-sharing.md) and [mesh transfer](docs/file-transfer.md).
+The backend tries direct TCP delivery to registered peers, with mesh fallback. Routed transfers use acknowledged chunks, whole-file SHA-256 verification and progress/status reporting. Source staging, recipient chunk bitmaps and transfer journals survive restart, with bounded automatic resume when contacts return and a manual Resume control. This is temporary transfer state, not permanent backup storage. See [file sharing](docs/file-sharing.md) and [mesh transfer](docs/file-transfer.md).
 
 Deleting a file through the REST API deletes **only the local device's file**. Other recipients keep theirs. Local files can be downloaded by ID; the Files list describes local files, not a global storage inventory.
 

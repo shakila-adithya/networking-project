@@ -31,6 +31,9 @@ public final class SetupAgent implements AutoCloseable {
     final storage.discovery.MeshDirectory directory;
     private final SetupConfigStore store;
     private final Path ui;
+    private final String startupDeviceId;
+    private final storage.device.DeviceProfileStore localProfile;
+    private volatile String visibilityError = "";
     private final Supplier<List<LocalNetworks.Candidate>> networks;
     private volatile SetupConfigStore.Saved saved;
     private volatile SetupConfigStore.Saved active;
@@ -54,6 +57,15 @@ public final class SetupAgent implements AutoCloseable {
     public SetupAgent(int port, SetupConfigStore store, Path ui, Supplier<List<LocalNetworks.Candidate>> networks) throws IOException {
         this.http = HttpServer.create(new InetSocketAddress("0.0.0.0", port), 0);
         this.store = store;
+        localProfile = new storage.device.DeviceProfileStore(store.directory().resolve("device-profile.json"));
+        Path identityFile = store.directory().resolve("device-id.txt");
+        Files.createDirectories(store.directory());
+        String identity = "";
+        if (store.exists()) { try { identity = store.load().peer().localPeerId(); } catch (IOException invalid) { /* start() reports damaged managed configuration */ } }
+        if (identity.isEmpty() && Files.exists(identityFile)) identity = Files.readString(identityFile).strip();
+        if (!identity.matches("[A-Za-z0-9_-]{1,40}")) identity = "device_" + UUID.randomUUID().toString().substring(0, 12);
+        startupDeviceId = identity;
+        if (!Files.exists(identityFile)) Files.writeString(identityFile, identity, StandardOpenOption.CREATE_NEW);
         bluetoothDirectory = new storage.bluetooth.BluetoothMeshDirectory(store.directory().resolve("bluetooth-restore.properties"));
         nativeNetwork = new storage.platform.NetworkManagerService();
         this.ui = ui.toAbsolutePath().normalize();
@@ -62,6 +74,10 @@ public final class SetupAgent implements AutoCloseable {
             ManagedPeer current = node;
             if (current != null) current.offerCandidate(endpoint);
         });
+        directory.identity(this::publicDevice);
+        http.createContext("/api/relay-storage", this::relayStorage);
+        http.createContext("/api/visibility", this::visibility);
+        http.createContext("/api/discovery", this::discovery);
         http.createContext("/api/radio", this::radio);
         http.createContext("/api/membership", this::membership);
         http.createContext("/api/setup", this::setup);
@@ -73,10 +89,101 @@ public final class SetupAgent implements AutoCloseable {
     public void start() {
         http.start();
         directory.start();
+        applyIdleVisibility();
         if (store.exists()) {
             try { saved = store.load(); if (store.autoJoin()) restart(); else phase = "LEFT"; }
             catch (Exception e) { phase = "ERROR"; error = "Cannot load saved configuration. Apply valid settings to recover."; }
         }
+    }
+    private storage.discovery.MeshDirectory.DeviceAdvertisement publicDevice() {
+        var profile = localProfile.load();
+        var config = active;
+        String id = saved == null ? startupDeviceId : saved.peer().localPeerId();
+        return new storage.discovery.MeshDirectory.DeviceAdvertisement("Relay-device-v3", id, profile.displayName(),
+                config == null ? "" : config.peer().clusterId(), config == null ? 0 : config.peer().port(), profile.visible());
+    }
+    private void applyIdleVisibility() {
+        if (node != null) return;
+        var adapter = bluetoothDirectory.adapter();
+        if (adapter == null) return;
+        try {
+            var d = publicDevice();
+            if (d.visible()) adapter.advertise(d.deviceId(), d.displayName(), null);
+            else adapter.stopAdvertising();
+            visibilityError = "";
+        } catch (Exception e) { visibilityError = "Bluetooth visibility failed: " + e.getMessage(); }
+    }
+    private Map<String, Object> visibilityStatus() {
+        var d = publicDevice();
+        return Map.of("deviceId", d.deviceId(), "visible", d.visible(), "displayName", d.displayName(),
+                "phase", phase, "bluetoothAvailable", bluetoothDirectory.adapter() != null,
+                "bluetoothReason", bluetoothDirectory.reason(), "error", !visibilityError.isBlank() || bluetoothDirectory.adapter() == null
+                        ? visibilityError : bluetoothDirectory.adapter().discoveryLimitation());
+    }
+    private void visibility(HttpExchange exchange) throws IOException {
+        if (!localManagement(exchange)) { json(exchange, 403, Map.of("message", "Manage visibility on this device using localhost.")); return; }
+        if (exchange.getRequestMethod().equals("GET")) { json(exchange, 200, visibilityStatus()); return; }
+        if (!exchange.getRequestMethod().equals("POST")) { json(exchange, 405, Map.of("message", "Use GET or POST")); return; }
+        try {
+            byte[] bytes = exchange.getRequestBody().readNBytes(1025);
+            if (bytes.length > 1024) { json(exchange, 413, Map.of("message", "Visibility request too large")); return; }
+            JsonNode input = JSON.readTree(bytes);
+            if (input == null || !input.isObject() || input.size() != 1 || !input.path("visible").isBoolean())
+                throw new IllegalArgumentException("Choose whether this device is visible.");
+            boolean visible = input.path("visible").asBoolean();
+            setVisibility(visible);
+            json(exchange, 200, visibilityStatus());
+        } catch (IllegalArgumentException e) { json(exchange, 400, Map.of("message", e.getMessage())); }
+        catch (IOException e) { json(exchange, 409, Map.of("message", "Could not save visibility. Check local file permissions.")); }
+    }
+    private synchronized void setVisibility(boolean visible) throws IOException {
+                if (closed || restarting) throw new IllegalArgumentException("Wait for Relay to finish reconnecting.");
+                var previous = localProfile.load();
+                localProfile.save(previous.withVisible(visible));
+                if (!visible) {
+                    try { store.setAutoJoin(false); }
+                    catch (IOException e) { localProfile.save(previous); throw e; }
+                    var withdrawal = publicDevice();
+                    directory.announce(withdrawal);
+                    ManagedPeer old = node; node = null; active = null;
+                    if (old != null) old.close();
+                    phase = "LEFT";
+                } else if (node != null) node.updateVisibility(true);
+                applyIdleVisibility(); directory.scan();
+    }
+    private void relayStorage(HttpExchange exchange) throws IOException {
+        if (!localManagement(exchange)) { json(exchange, 403, Map.of("message", "Manage relay storage on this device using localhost.")); return; }
+        try {
+            var policy = storage.custody.StoragePolicy.load(store.directory());
+            if (exchange.getRequestMethod().equals("POST")) {
+                byte[] bytes = exchange.getRequestBody().readNBytes(1025);
+                if (bytes.length > 1024) { json(exchange, 413, Map.of("message", "Storage settings request too large")); return; }
+                var next = JSON.readValue(bytes, storage.custody.StoragePolicy.class);
+                synchronized (this) {
+                    if (closed || restarting) throw new IllegalArgumentException("Wait for Relay to finish reconnecting.");
+                    next.save(store.directory());
+                    try { if (node != null) node.configureRelayStorage(next); }
+                    catch (IOException | RuntimeException failure) { policy.save(store.directory()); throw failure; }
+                }
+                policy = next;
+            } else if (!exchange.getRequestMethod().equals("GET")) { json(exchange, 405, Map.of("message", "Use GET or POST")); return; }
+            var current = node;
+            json(exchange, 200, Map.of("policy", policy, "status", current == null
+                    ? Map.of("available", false, "error", "Join a mesh to enable encrypted store-and-forward. Pending data remains on disk.") : current.relayStorageStatus()));
+        } catch (IllegalArgumentException e) { json(exchange, 400, Map.of("message", e.getMessage())); }
+        catch (IOException e) { json(exchange, 409, Map.of("message", "Relay storage settings could not be loaded or saved. Existing data was kept.")); }
+    }
+    private void discovery(HttpExchange exchange) throws IOException {
+        if (!localManagement(exchange)) { json(exchange, 403, Map.of("message", "Open Relay on this device using localhost.")); return; }
+        if (!exchange.getRequestMethod().equals("GET")) { json(exchange, 405, Map.of("message", "Use GET")); return; }
+        List<Map<String, Object>> devices = new ArrayList<>();
+        for (var d : directory.devices()) devices.add(Map.of("deviceId", d.deviceId(), "name", d.displayName().isEmpty() ? d.deviceId() : d.displayName(),
+                "meshId", d.meshId(), "address", d.address(), "kind", "lan", "verified", false));
+        ManagedPeer current = node;
+        for (var d : current == null ? bluetoothDirectory.nearby() : current.bluetoothNearby()) if (d.relayDeviceId().isPresent())
+            devices.add(Map.of("deviceId", d.relayDeviceId().orElseThrow(), "name", d.friendlyName().orElse(d.relayDeviceId().orElseThrow()),
+                    "meshId", d.meshId().orElse(""), "address", storage.bluetooth.BluetoothAddress.withPrefix(d.address()), "kind", "bluetooth", "verified", false));
+        json(exchange, 200, Map.of("devices", devices, "meshes", meshAdvertisements(), "visibility", visibilityStatus(), "error", directory.error()));
     }
     private void radio(HttpExchange exchange) throws IOException {
         if (!LocalUserGuard.allowed(exchange)) { json(exchange, 403, Map.of("message", "Open Relay on this laptop using localhost.")); return; }
@@ -177,7 +284,7 @@ public final class SetupAgent implements AutoCloseable {
                          var authenticated = security.authenticate(raw, true, "mesh")) { }
                 }
                 SetupConfigStore.Saved previous = saved;
-                String id = previous == null ? "device_" + UUID.randomUUID().toString().substring(0, 12) : previous.peer().localPeerId();
+                String id = previous == null ? startupDeviceId : previous.peer().localPeerId();
                 String address = form.path("localAddress").asText(previous == null ? "" : previous.peer().advertisedAddress());
                 var detected = networks.get();
                 if (address.isBlank() && detected.size() == 1) address = detected.getFirst().address();
@@ -447,7 +554,26 @@ public final class SetupAgent implements AutoCloseable {
             json(exchange, 403, Map.of("message", "Open Relay on this laptop using localhost.")); return;
         }
         var target = active;
-        if (target == null || node == null) { json(exchange, 503, Map.of("message", "Relay isn't connected to a mesh yet. Join one on the Network map, or check your connection in Settings.")); return; }
+        if (target == null || node == null) {
+            String code = phase.equals("ERROR") ? "SERVICE_UNAVAILABLE" : phase.equals("STARTING") ? "MESH_STARTING" : "MESH_NOT_JOINED";
+            String message = phase.equals("ERROR") ? "Relay could not start. Check the connection details in Settings."
+                    : phase.equals("STARTING") ? "Relay is starting your mesh connections."
+                    : "Relay isn't connected to a mesh yet. Join one on the Network map, or check your connection in Settings.";
+            json(exchange, 503, Map.of("code", code, "message", message)); return;
+        }
+        byte[] deviceBody = null;
+        if (requestPath.equals("/api/device") && exchange.getRequestMethod().equals("POST")) {
+            deviceBody = exchange.getRequestBody().readNBytes(4097);
+            if (deviceBody.length > 4096) { json(exchange, 413, Map.of("message", "Device request too large")); return; }
+            JsonNode patch;
+            try { patch = JSON.readTree(deviceBody); } catch (IOException e) { json(exchange, 400, Map.of("message", "Invalid device settings")); return; }
+            if (patch != null && patch.has("visible")) {
+                if (!patch.path("visible").isBoolean() || patch.size() != 1) { json(exchange, 400, Map.of("message", "Change visibility separately from your device name.")); return; }
+                try { setVisibility(patch.path("visible").asBoolean()); json(exchange, 200, visibilityStatus()); }
+                catch (IllegalArgumentException e) { json(exchange, 400, Map.of("message", e.getMessage())); }
+                return;
+            }
+        }
         HttpURLConnection connection = (HttpURLConnection) URI.create("http://127.0.0.1:" + target.restPort()
                 + exchange.getRequestURI().toASCIIString()).toURL().openConnection();
         connection.setConnectTimeout(3000);
@@ -461,7 +587,7 @@ public final class SetupAgent implements AutoCloseable {
             if (exchange.getRequestMethod().equals("POST")) {
                 connection.setDoOutput(true);
                 connection.setChunkedStreamingMode(65536);
-                try (OutputStream out = connection.getOutputStream()) { exchange.getRequestBody().transferTo(out); }
+                try (OutputStream out = connection.getOutputStream()) { if (deviceBody != null) out.write(deviceBody); else exchange.getRequestBody().transferTo(out); }
             }
             int code = connection.getResponseCode();
             for (String header : List.of("Content-Type", "Content-Disposition", "X-Content-Type-Options")) {

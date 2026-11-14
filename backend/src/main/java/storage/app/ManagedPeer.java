@@ -42,6 +42,7 @@ public final class ManagedPeer implements AutoCloseable {
             // HttpServer.stop() does not release a server that has never started. Mesh features are attached
             // below; until then those endpoints answer 503.
             rest.attachSecurity(security);
+            rest.setupOwnsVisibility();
             rest.start();
             mesh = new MeshRuntime(configuration, server.fileStore(), new DeviceProfileService(
                     new DeviceProfileStore(profilePath)), sharedBluetooth);
@@ -70,6 +71,11 @@ public final class ManagedPeer implements AutoCloseable {
     public boolean scanBluetooth() { return mesh != null && mesh.scanNow(); }
     public Map<String, Object> deviceStatus() { return mesh.deviceStatus(); }
     public Map<String, Object> updateDeviceName(String name) throws IOException { return mesh.updateDevice(name, null); }
+    public Map<String, Object> relayStorageStatus() { return mesh.node().custodyStatus(); }
+    public void configureRelayStorage(storage.custody.StoragePolicy policy) throws IOException {
+        if (mesh.node().custody() != null) mesh.node().custody().configure(policy.quotaBytes(), policy.retentionHours());
+    }
+    public void updateVisibility(boolean visible) throws IOException { mesh.updateDevice(null, visible); }
     public boolean connected() { return mesh != null && !mesh.node().neighbourIds().isEmpty(); }
     @Override public void close() {
         if (rest != null) rest.close();

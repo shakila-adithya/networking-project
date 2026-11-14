@@ -135,12 +135,16 @@ export const people: Person[] = [
     status: "SUSPECTED",
   },
 ];
+class ApiError extends Error {
+  constructor(message: string, readonly code: string) { super(message); }
+}
 export async function request(path: string, options?: RequestInit) {
   const r = await fetch(`/api${path}`, { ...options, cache: "no-store" });
   const data = await r.json().catch(() => ({}));
   if (!r.ok)
-    throw new Error(
+    throw new ApiError(
       data.message || "Can't reach Relay on this device. Start or restart Relay, then try again.",
+      data.code || "",
     );
   return data;
 }
@@ -152,6 +156,8 @@ type State = {
   inbox: Chat[];
   neighbours: string[];
   links: Record<string, string>;
+  graph: { deviceId: string; links: Record<string, number>; reachable: boolean }[];
+  custody: { available: boolean; pending?: number; error?: string } | null;
   localId: string;
   transport: string;
   bluetooth: BluetoothInfo | null;
@@ -165,6 +171,7 @@ type State = {
   /** Connects to a nearby Relay device by its id. Throws an Error with a readable message on failure. */
   connectNearby: (deviceId: string, address?: string) => Promise<void>;
   error: string;
+  connectionNotice: "" | "not-joined" | "starting";
   refresh: () => Promise<void>;
 };
 const Context = createContext<State>(null!);
@@ -180,10 +187,13 @@ export function MeshProvider({ children }: { children: React.ReactNode }) {
     [bluetooth, setBluetooth] = useState<BluetoothInfo | null>(null),
     [deviceName, setDeviceName] = useState("You"),
     [device, setDevice] = useState<DeviceInfo | null>(null),
+    [graph, setGraph] = useState<{ deviceId: string; links: Record<string, number>; reachable: boolean }[]>([]),
+    [custody, setCustody] = useState<{ available: boolean; pending?: number; error?: string } | null>(null),
     [nearby, setNearby] = useState<Nearby>(noNearby),
     [previewDev, setPreviewDev] = useState<DeviceInfo>(previewDevice),
     [previewNear, setPreviewNear] = useState<Nearby>(previewNearby),
-    [error, setError] = useState("");
+    [error, setError] = useState(""),
+    [connectionNotice, setConnectionNotice] = useState<"" | "not-joined" | "starting">("");
   useEffect(() => {
     setPreviewState(localStorage.getItem("relay-mode") !== "live");
   }, []);
@@ -194,7 +204,7 @@ export function MeshProvider({ children }: { children: React.ReactNode }) {
   const refresh = useCallback(async () => {
     try {
       const health = await request("/health");
-      setError("");
+      setError(""); setConnectionNotice("");
       const byId = new Map<string, Person>();
       for (const p of (health.peers || []).filter(
         (p: any) => p.source !== "local" && p.kind !== "local",
@@ -216,6 +226,15 @@ export function MeshProvider({ children }: { children: React.ReactNode }) {
         names = m.names || {};
         const links: Record<string, string> = Object.fromEntries((m.neighbours || []).map((id: string) => [id, m.links?.[id] || "unknown"]));
         setLinks(links);
+        setGraph(m.topology || []); setCustody(m.custody || null);
+        if (m.historyError) setError(m.historyError);
+        for (const member of m.topology || []) {
+          if (member.deviceId !== m.deviceId && !byId.has(member.deviceId)) byId.set(member.deviceId, {
+            id: member.deviceId, name: names[member.deviceId] || member.deviceId,
+            detail: member.reachable ? "Mesh member · reachable" : "Last known member · finding a route",
+            tone: member.reachable ? "cyan" : "muted", status: member.reachable ? "ALIVE" : "SUSPECTED",
+          });
+        }
         setLocalId(m.deviceId);
         setDeviceName(m.deviceName || m.deviceId);
         setInbox(m.inbox || []);
@@ -245,7 +264,7 @@ export function MeshProvider({ children }: { children: React.ReactNode }) {
           });
         }
       } catch {
-        setNeighbours([]);
+        setNeighbours([]); setGraph([]); setCustody(null);
         setLinks({});
       }
       // Friendly names learned from the mesh replace raw ids (the id stays in Person.id for API calls).
@@ -261,8 +280,14 @@ export function MeshProvider({ children }: { children: React.ReactNode }) {
         setNearby(noNearby);
       }
     } catch (e) {
-      setNeighbours([]); setLinks({}); setPeers([]); setDevice(null); setBluetooth(null); setNearby(noNearby);
-      setError((e as Error).message);
+      setNeighbours([]); setLinks({}); setGraph([]); setCustody(null); setPeers([]); setDevice(null); setBluetooth(null); setNearby(noNearby);
+      const failure = e as Error;
+      // Older running backends do not include a status code yet.
+      const notJoined = e instanceof ApiError && e.code === "MESH_NOT_JOINED"
+        || failure.message === "Relay isn't connected to a mesh yet. Join one on the Network map, or check your connection in Settings.";
+      const starting = e instanceof ApiError && e.code === "MESH_STARTING";
+      setConnectionNotice(starting ? "starting" : notJoined ? "not-joined" : "");
+      setError(starting || notJoined ? "" : failure.message);
     }
   }, []);
   useEffect(() => {
@@ -287,7 +312,7 @@ export function MeshProvider({ children }: { children: React.ReactNode }) {
     async (patch: { displayName?: string; visible?: boolean }) => {
       if (preview) {
         // Validate first: an error must reach the caller, not be thrown inside a state updater.
-        if (patch.displayName !== undefined && patch.displayName.trim().length > 32)
+        if (patch.displayName !== undefined && Array.from(patch.displayName.trim()).length > 32)
           throw new Error("The device name can be at most 32 characters.");
         setPreviewDev((d) => {
           const customName = patch.displayName !== undefined ? patch.displayName.trim() : d.customName;
@@ -306,6 +331,11 @@ export function MeshProvider({ children }: { children: React.ReactNode }) {
         });
         return;
       }
+      if (patch.visible !== undefined) {
+        if (patch.displayName !== undefined) await request("/device", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ displayName: patch.displayName }) });
+        await request("/visibility", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ visible: patch.visible }) });
+        await refresh(); return;
+      }
       const updated = (await request("/device", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -314,7 +344,7 @@ export function MeshProvider({ children }: { children: React.ReactNode }) {
       setDevice(updated);
       setDeviceName(updated.displayName);
     },
-    [preview],
+    [preview, refresh],
   );
   const scanNearby = useCallback(async () => {
     if (preview) {
@@ -357,6 +387,8 @@ export function MeshProvider({ children }: { children: React.ReactNode }) {
         localId,
         transport,
         bluetooth,
+        graph: preview ? [] : graph,
+        custody: preview ? null : custody,
         deviceName: preview ? previewDev.displayName : deviceName,
         device: preview ? previewDev : device,
         nearby: preview ? previewNear : nearby,
@@ -364,6 +396,7 @@ export function MeshProvider({ children }: { children: React.ReactNode }) {
         scanNearby,
         connectNearby,
         error,
+        connectionNotice,
         refresh,
       }}
     >

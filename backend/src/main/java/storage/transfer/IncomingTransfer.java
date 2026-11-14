@@ -16,6 +16,14 @@ final class IncomingTransfer {
     final int totalChunks;
     final Path part;
 
+    record Journal(UUID transferId, String from, FileMetadata metadata, int chunkSize, byte[] received) { }
+    private Path journal() { return part.resolveSibling(transferId + ".json"); }
+    synchronized void save() throws IOException { storage.files.AtomicJson.save(journal(), new Journal(transferId, from, metadata, chunkSize, received.toByteArray())); }
+    synchronized void restore(byte[] bits) throws IOException {
+        BitSet saved = BitSet.valueOf(bits);
+        if (saved.length() > totalChunks) throw new IOException("Invalid received-chunk journal");
+        received.or(saved);
+    }
     private final BitSet received = new BitSet();
     private RandomAccessFile file;
     private long lastActivityNanos = System.nanoTime();
@@ -49,7 +57,9 @@ final class IncomingTransfer {
         if (!received.get(index)) {
             file.seek((long) index * chunkSize);
             file.write(data);
+            file.getChannel().force(true);
             received.set(index);
+            try { save(); } catch (IOException e) { received.clear(index); throw e; }
         }
         return true;
     }

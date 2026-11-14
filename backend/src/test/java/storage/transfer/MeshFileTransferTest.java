@@ -294,14 +294,14 @@ class MeshFileTransferTest {
     }
 
     @Test
-    void leftoverPartialFilesFromAnEarlierRunAreRemovedAtStartup() throws Exception {
+    void unknownPriorStagingIsPreservedRatherThanErasedAtStartup() throws Exception {
         Path root = tmp.resolve("store-Z");
         Files.createDirectories(root.resolve("mesh-transfers/incoming"));
         Files.writeString(root.resolve("mesh-transfers/incoming/old.part"), "stale");
         Files.createDirectories(root.resolve("mesh-transfers/outgoing"));
         Files.writeString(root.resolve("mesh-transfers/outgoing/old.bin"), "stale");
         device("Z", config(0, 1_000));
-        assertFalse(Files.exists(root.resolve("mesh-transfers/incoming/old.part")));
-        assertFalse(Files.exists(root.resolve("mesh-transfers/outgoing/old.bin")));
+        assertEquals("stale", Files.readString(root.resolve("mesh-transfers/incoming/old.part")));
+        assertEquals("stale", Files.readString(root.resolve("mesh-transfers/outgoing/old.bin")));
     }
 }

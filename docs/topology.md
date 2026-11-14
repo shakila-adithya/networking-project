@@ -4,7 +4,7 @@ Code: `storage.link.TopologyController`, `TopologyPolicy`, `TopologyTask` (a nam
 
 Discovery code reports nearby devices as `Candidate(deviceId, address, signal)`:
 configured peers are offered permanently, UDP-discovered peers expire after 30 s unless re-announced.
-A Bluetooth scanner would call the same `offer(...)` with the Bluetooth address and RSSI-based signal.
+The Bluetooth scanner calls the same `offer(...)` with the Bluetooth address and RSSI-based signal.
 
 | Rule | Why |
 |---|---|
@@ -22,5 +22,5 @@ A Bluetooth scanner would call the same `offer(...)` with the Bluetooth address 
   cause one extra link; the reserved slot bounds this.
 - The cap applies to links this device dials. Incoming links from other devices are accepted regardless
   (the radio stack would enforce its own limit).
-- A weak existing link is not dropped in favour of a better candidate yet.
-- Only IP links (TCP) have been exercised; signal strength is a constant 50 there.
+- Healthy carriers remain open. Primary selection uses cost hysteresis; a failed primary immediately promotes a surviving transport. Unknown IP signal is not treated as measured RSSI.
+- Automated recovery uses real loopback TCP and explicitly simulated alternate carriers. Two-device Bluetooth and cross-platform radio interoperability remain unverified. See [implementation status](offline-mesh-status.md).

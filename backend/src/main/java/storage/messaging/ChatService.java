@@ -29,6 +29,16 @@ public final class ChatService implements AutoCloseable {
     private static final int INBOX_LIMIT = 500;
 
     private final MeshNode node;
+    private final storage.custody.EncryptedSpool history;
+    private final com.fasterxml.jackson.databind.ObjectMapper json = new com.fasterxml.jackson.databind.ObjectMapper();
+    private volatile String historyError = "";
+    private record Journal(ReceivedChat incoming, String to, byte[] payload, DeliveryStatus state) { }
+    public String historyError() { return historyError; }
+    private void journal(UUID id, Journal value) {
+        if (history == null) return;
+        try { history.put(id, json.writeValueAsBytes(value)); }
+        catch (IOException e) { historyError = "Chat storage failed; pending data was kept: " + e.getMessage(); throw new java.io.UncheckedIOException(e); }
+    }
     private final int maxAttempts;
     private final Duration retryInterval;
     private final ScheduledExecutorService retryTimer = Executors.newSingleThreadScheduledExecutor(task -> {
@@ -53,7 +63,9 @@ public final class ChatService implements AutoCloseable {
         }
     }
 
-    public ChatService(MeshNode node, int maxAttempts, Duration retryInterval) {
+    public ChatService(MeshNode node, int maxAttempts, Duration retryInterval) { this(node, maxAttempts, retryInterval, null); }
+    public ChatService(MeshNode node, int maxAttempts, Duration retryInterval, storage.custody.EncryptedSpool history) {
+        this.history = history;
         if (maxAttempts < 1) {
             throw new IllegalArgumentException("maxAttempts must be at least 1");
         }
@@ -62,6 +74,25 @@ public final class ChatService implements AutoCloseable {
         this.retryInterval = retryInterval;
         node.setHandler(MessageType.CHAT, this::onChat);
         node.setHandler(MessageType.ACK, this::onAck);
+        if (history != null) {
+            try {
+                for (UUID id : history.ids()) {
+                    try {
+                        Journal saved = json.readValue(history.get(id), Journal.class);
+                        if (saved.incoming() != null) {
+                            inbox.add(saved.incoming());
+                            while (inbox.size() > INBOX_LIMIT) inbox.removeFirst();
+                        } else {
+                            Pending entry = new Pending(saved.to(), saved.payload()); entry.status = saved.state(); entry.attempts = maxAttempts; pending.put(id, entry);
+                            if (entry.status == DeliveryStatus.DELIVERED && node.custody() != null) node.custody().completed(MessageType.CHAT, entry.to, entry.payload);
+                        }
+                    } catch (IOException corrupt) { historyError = "Some chat records failed integrity checks and were kept."; }
+                }
+            } catch (IOException e) { historyError = "Could not load chat history: " + e.getMessage(); }
+            node.onNeighbourChange(peer -> pending.forEach((id, entry) -> {
+                synchronized (entry) { if (entry.status == DeliveryStatus.PENDING && entry.attempts >= maxAttempts) { entry.attempts = 0; attempt(id, entry); } }
+            }), peer -> { });
+        }
     }
 
     private MeshNode node() {
@@ -80,8 +111,17 @@ public final class ChatService implements AutoCloseable {
         }
         UUID chatId = UUID.randomUUID();
         Pending entry = new Pending(to, encodeChat(chatId, textBytes));
+        if (pending.values().stream().filter(p -> p.status == DeliveryStatus.PENDING).count() >= 1000) throw new IllegalStateException("Pending message limit reached. Existing messages were kept.");
+        journal(chatId, new Journal(null, to, entry.payload, DeliveryStatus.PENDING));
         pending.put(chatId, entry);
-        attempt(chatId, entry);
+        try { attempt(chatId, entry); }
+        catch (RuntimeException e) {
+            if (node.durable()) {
+                pending.remove(chatId);
+                if (history != null) try { history.remove(chatId); } catch (IOException failure) { e.addSuppressed(failure); }
+            }
+            throw e;
+        }
         return chatId;
     }
 
@@ -107,9 +147,11 @@ public final class ChatService implements AutoCloseable {
             boolean broadcast = Message.BROADCAST.equals(entry.to);
             if (broadcast) {
                 entry.status = handedOver > 0 ? DeliveryStatus.SENT : DeliveryStatus.FAILED;
+                journal(chatId, new Journal(null, entry.to, entry.payload, entry.status));
                 return;
             }
             if (entry.attempts >= maxAttempts) {
+                if (node.durable()) return; // bounded active retries; durable custody waits for later contacts
                 retryTimer.schedule(() -> expire(entry), retryInterval.toMillis(), TimeUnit.MILLISECONDS);
             } else {
                 retryTimer.schedule(() -> attempt(chatId, entry), retryInterval.toMillis(), TimeUnit.MILLISECONDS);
@@ -125,7 +167,7 @@ public final class ChatService implements AutoCloseable {
         }
     }
 
-    private void onChat(Message message) {
+    private synchronized void onChat(Message message) {
         UUID chatId;
         String text;
         try (DataInputStream in = new DataInputStream(new ByteArrayInputStream(message.payload()))) {
@@ -139,9 +181,19 @@ public final class ChatService implements AutoCloseable {
             System.err.println("Dropped malformed chat: " + e.getMessage());
             return;
         }
-        if (deliveredChats.firstSeen(chatId)) {
+        UUID receipt = UUID.nameUUIDFromBytes((message.source() + "/" + chatId).getBytes(StandardCharsets.UTF_8));
+        boolean alreadyStored = false;
+        if (history != null && history.contains(receipt)) {
+            try {
+                Journal saved = json.readValue(history.get(receipt), Journal.class);
+                alreadyStored = saved.incoming() != null && saved.incoming().chatId().equals(chatId) && saved.incoming().from().equals(message.source());
+                if (!alreadyStored) throw new IOException("Invalid chat receipt");
+            } catch (IOException e) { historyError = "Chat receipt integrity failed; no acknowledgement was sent."; throw new java.io.UncheckedIOException(e); }
+        }
+        if (!alreadyStored && (history != null || deliveredChats.firstSeen(receipt))) {
             ReceivedChat chat = new ReceivedChat(chatId, message.source(), message.destination(), text,
                     message.timestampMillis());
+            journal(receipt, new Journal(chat, null, null, DeliveryStatus.DELIVERED));
             synchronized (this) {
                 inbox.addLast(chat);
                 while (inbox.size() > INBOX_LIMIT) {
@@ -176,7 +228,10 @@ public final class ChatService implements AutoCloseable {
         if (entry != null && entry.to.equals(message.source())) {
             synchronized (entry) {
                 if (entry.status == DeliveryStatus.PENDING) {
+                    UUID chatId = new UUID(high, low);
+                    journal(chatId, new Journal(null, entry.to, entry.payload, DeliveryStatus.DELIVERED));
                     entry.status = DeliveryStatus.DELIVERED;
+                    if (node.custody() != null) node.custody().completed(MessageType.CHAT, entry.to, entry.payload);
                 }
             }
         }

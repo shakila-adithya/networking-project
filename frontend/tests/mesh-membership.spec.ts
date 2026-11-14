@@ -1,8 +1,9 @@
 import { test, expect, Page } from "@playwright/test";
 
-async function mockMembership(page: Page) {
+async function mockMembership(page: Page, meshesNearby = true) {
   await page.addInitScript(() => localStorage.setItem("relay-mode", "live"));
   let meshId = "";
+  let phase = "LEFT";
   const calls: { path: string; body: Record<string, unknown> }[] = [];
   await page.route("**/api/**", async route => {
     const path = new URL(route.request().url()).pathname;
@@ -10,16 +11,17 @@ async function mockMembership(page: Page) {
     if (route.request().method() === "POST") calls.push({ path, body });
     if (path === "/api/membership/join") {
       if (body.password !== "correct password for mesh") return route.fulfill({ status: 409, json: { message: "Wrong password; mesh authentication failed" } });
-      meshId = "NearbyMesh";
+      meshId = "NearbyMesh"; phase = "CONNECTED";
       return route.fulfill({ status: 202, json: { message: "Mesh authenticated" } });
     }
-    if (path === "/api/membership/leave") { meshId = ""; return route.fulfill({ json: { message: "Left mesh" } }); }
+    if (path === "/api/membership/create") { meshId = String(body.meshId); phase = "DISCOVERING"; return route.fulfill({ status: 202, json: { message: "Mesh created" } }); }
+    if (path === "/api/membership/leave") { meshId = ""; phase = "LEFT"; return route.fulfill({ json: { message: "Left mesh" } }); }
     if (path.startsWith("/api/radio/") || path === "/api/membership/scan") return route.fulfill({ status: 202, json: { message: "Operation requested" } });
     const data: Record<string, unknown> = {
       "/api/health": { peers: [] }, "/api/files": { files: [] }, "/api/mesh": { deviceId: "Local", neighbours: [], routes: [], links: {}, inbox: [] },
       "/api/device": { deviceId: "Local", displayName: "Local", customName: "", visible: false, transport: "tcp", bluetooth: { available: false, reason: "No adapter" } },
       "/api/nearby": { bluetoothAvailable: false, items: [], scanning: false, lastScanAt: 0 },
-      "/api/membership": { meshId, phase: meshId ? "CONNECTED" : "LEFT", nearby: [{ meshId: "NearbyMesh", peerId: "Other", address: "192.168.50.2", peerPort: 5000, verified: false }], error: "", discoveryError: "" },
+      "/api/membership": { meshId, phase, nearby: meshesNearby ? [{ meshId: "NearbyMesh", peerId: "Other", address: "192.168.50.2", peerPort: 5000, verified: false }] : [], error: "", discoveryError: "" },
       "/api/setup/networks": { networks: [{ address: "192.168.50.3", label: "Local Wi-Fi" }] },
       "/api/radio": { available: true, state: "STOPPED", mode: "", reason: "", adapters: [{ path: "/device/1", name: "wlan0", type: "wifi", hotspotCapable: true }], peers: [] },
     };
@@ -33,8 +35,9 @@ test("preview keeps membership and radio operations separate from live hardware"
   page.on("request", request => { if (request.url().includes("/api/membership") || request.url().includes("/api/radio")) calls.push(request.url()); });
   await page.goto("/");
   const panel = page.getByRole("region", { name: "Relay mesh membership" });
-  await expect(panel.getByText(/Design preview/)).toBeVisible();
-  await expect(panel.getByRole("button", { name: "Scan meshes" })).toBeDisabled();
+  await expect(panel.locator(".connection-preview-note")).toBeVisible();
+  await expect(panel.getByRole("button", { name: "Scan nearby", exact: true })).toBeEnabled();
+  await panel.getByRole("button", { name: "Scan nearby", exact: true }).click();
   expect(calls).toEqual([]);
 });
 
@@ -47,7 +50,7 @@ test("join authenticates unverified mesh and never puts passwords in browser sto
   await panel.getByLabel("Mesh local network").selectOption("192.168.50.3");
   await panel.getByLabel("Mesh password", { exact: true }).fill("incorrect password for mesh");
   await panel.getByRole("button", { name: "Authenticate and join" }).click();
-  await expect(panel.getByRole("alert")).toContainText("Wrong password");
+  await expect(panel.locator("#mesh-membership").getByRole("alert")).toContainText("Wrong password");
   await expect(panel.getByLabel("Mesh password", { exact: true })).toBeVisible();
   await panel.getByLabel("Mesh password", { exact: true }).fill("correct password for mesh");
   await panel.getByRole("button", { name: "Authenticate and join" }).click();
@@ -91,4 +94,39 @@ test("live membership and radio forms fit a mobile viewport", async ({ page }) =
     expect(box).not.toBeNull();
     expect(box!.x + box!.width).toBeLessThanOrEqual(390);
   }
+});
+
+
+test("existing meshes come first and joining shows only detected connection choices", async ({ page }) => {
+  await mockMembership(page);
+  await page.goto("/");
+  const membership = page.getByRole("region", { name: "Mesh membership", exact: true });
+  await expect(membership.getByRole("heading", { name: "Find a mesh to join" })).toBeVisible();
+  const join = membership.getByRole("button", { name: "Join mesh NearbyMesh" });
+  const create = membership.getByRole("button", { name: "Create mesh", exact: true });
+  expect((await join.boundingBox())!.y).toBeLessThan((await create.boundingBox())!.y);
+  await join.click();
+  await expect(membership.getByRole("button", { name: /Wi-Fi \/ LAN Found this mesh/ })).toHaveAttribute("aria-pressed", "true");
+  await expect(membership.getByRole("button", { name: /Bluetooth Not detected/ })).toBeDisabled();
+  await membership.getByText("Need another connection?", { exact: true }).click();
+  await membership.getByRole("button", { name: "Set up hotspot", exact: true }).click();
+  await expect(page.getByRole("tab", { name: /Hotspot/ })).toHaveAttribute("aria-selected", "true");
+  await expect(page.getByRole("checkbox")).not.toBeChecked();
+});
+
+test("when no mesh is found, creating starts a password-protected group for others to join", async ({ page }) => {
+  const calls = await mockMembership(page, false);
+  await page.goto("/");
+  const membership = page.getByRole("region", { name: "Mesh membership", exact: true });
+  await expect(membership.getByText(/No meshes found yet/)).toBeVisible();
+  await membership.getByRole("button", { name: "Create mesh", exact: true }).click();
+  await expect(membership.getByText(/Other devices can find it and join with that password/)).toBeVisible();
+  await membership.getByLabel("Mesh name", { exact: true }).fill("My-group");
+  await membership.getByLabel("Mesh local network").selectOption("192.168.50.3");
+  await membership.getByLabel("Mesh password", { exact: true }).fill("new password for my mesh");
+  await membership.getByRole("button", { name: "Create this mesh", exact: true }).click();
+  expect(calls).toContainEqual({ path: "/api/membership/create", body: { meshId: "My-group", password: "new password for my mesh", localAddress: "192.168.50.3" } });
+  await expect(membership.getByRole("button", { name: "Leave mesh", exact: true })).toBeVisible();
+  await expect(membership.getByLabel("Mesh password", { exact: true })).toHaveCount(0);
+  expect(await page.evaluate(() => JSON.stringify({ ...localStorage, ...sessionStorage }))).not.toContain("new password for my mesh");
 });

@@ -32,7 +32,7 @@ final class TransferTask implements Runnable {
             awaitResult();
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
-            transfer.fail("cancelled");
+            transfer.pause("paused after restart; sender bytes are retained");
         } catch (IOException e) {
             transfer.fail("cannot read the file to send: " + e.getMessage());
         } catch (RuntimeException e) {
@@ -49,8 +49,9 @@ final class TransferTask implements Runnable {
 
     private boolean failIfStalled(String phase) {
         if (stalled()) {
-            transfer.fail("no response from " + transfer.to + " for " + config.stallTimeout().toSeconds()
-                    + " s while " + phase + " (route unavailable); the transfer can be resumed");
+            String reason = "no response from " + transfer.to + " for " + config.stallTimeout().toSeconds()
+                    + " s while " + phase + " (route unavailable); the transfer can be resumed";
+            if (service.durable()) transfer.pause(reason); else transfer.fail(reason);
             return true;
         }
         return false;

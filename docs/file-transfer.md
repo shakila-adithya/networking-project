@@ -12,14 +12,12 @@ it travels hop by hop along the routes found by the router (see [routing.md](rou
 
 * **Route breaks need no special code.** Chunks are ordinary routed messages; when a relay dies the router
   rediscovers a path and the unacknowledged chunks are retransmitted over it.
-* **Stalls are visible and resumable.** If nothing is acknowledged for the stall timeout (45 s) the transfer ends
-  `FAILED` ("route unavailable; can be resumed"), keeps its staged file, and `resume` continues from the chunks
-  the receiver already holds. Real run: a relay was stopped at 32 % (235 of 733 chunks); after it returned,
-  the resume sent only the 490 missing chunks.
+* **Stalls are visible and resumable.** Without custody, a stall ends `FAILED` and allows manual resume. With secure custody enabled it waits for a later contact. Chunk acknowledgements, source journals and receiver bitmaps allow missing chunks to resume, including after a process restart. Final delivery requires a verified `FILE_DONE`, not a relay custody acknowledgement.
 * **Integrity and idempotence.** Wrong hash => refused and the partial file deleted. Sending a file the receiver already
   stores is recognised (`ALREADY_HAVE`) and needs no chunks.
-* **Bounds.** Max 8 concurrent incoming transfers, at most 65 536 chunks, partial files idle for 30 min are dropped,
-  leftovers from an earlier run are deleted at start (transfer state lives in memory, so a restart cannot resume).
+* **Bounds.** Max 8 concurrent incoming transfers and 65,536 chunks. Recipient partial files expire after 24 hours idle. Source staging is retained until final delivery and is bounded to 4 GiB / 200 pending transfers. Startup preserves journals and unknown existing staging rather than deleting user data.
+* **Temporary relay custody.** When an OS-protected key is available, encrypted chunks can cross separate contacts. Relay defaults are 1 GB / 24 hours, adjustable in Settings. Full custody storage rejects new data; expiry affects temporary relay records, while the sender retains its original. See [implementation status](offline-mesh-status.md) for key-store requirements and limitations.
+
 
 ## Using it
 * **UI:** *Share files* -> choose a person. A recipient that is directly registered uses the fast TCP path; a recipient that
@@ -34,6 +32,6 @@ it travels hop by hop along the routes found by the router (see [routing.md](rou
   `-Dmesh.stallSeconds=<seconds>`.
 
 ## Limitations
-* Network routing and connection recovery do not create additional stored copies. Only the intended recipient commits a file; intermediate relays forward chunks.
+* Network routing and connection recovery do not create additional stored copies. Only the intended recipient commits a received file; intermediate relays may temporarily retain encrypted custody records within the configured limits.
 * One thread per active outgoing transfer; browser sends are limited to 100 MiB. The backend allows up to 2 GiB, with an additional 65,536-chunk bound (1 GiB at the default 16 KiB chunk size).
 * Application carriers use mesh-password authentication and hop-by-hop TLS authenticated encryption. Trusted relays can inspect forwarded plaintext; this is not end-to-end encryption against members.

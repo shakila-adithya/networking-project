@@ -1,0 +1,16 @@
+{
+  "localPeerId": "A",
+  "bindAddress": "0.0.0.0",
+  "advertisedAddress": "192.168.1.10",
+  "port": 5000,
+  "storageDirectory": "storage-data/A",
+  "clusterId": "home-lan-storage",
+  "discoveryEnabled": true,
+  "discoveryGroup": "239.255.42.99",
+  "discoveryPort": 45555,
+  "discoverySecret": "replace-with-a-random-secret-32-chars",
+  "peers": [
+    { "id": "A", "address": "192.168.1.10", "port": 5000 },
+    { "id": "B", "address": "192.168.1.11", "port": 5001 }
+  ]
+}

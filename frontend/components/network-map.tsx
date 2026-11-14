@@ -6,7 +6,8 @@ import { Icon, Eyebrow, Badge, Search } from "./ui";
 import { MeshMembership } from "./mesh-membership";
 import { MapViewport, type MapCamera } from "./map-viewport";
 import { ConnectionGlyph } from "./connection-glyph";
-import { VisibilityCard, ConnectCard } from "./nearby";
+import { useNetworkDiscovery, MapVisibility } from "./network-discovery";
+import { ConnectCard } from "./nearby";
 const sample: Person[] = [
   {
     id: "You",
@@ -82,11 +83,13 @@ const sample: Person[] = [
   },
 ];
 export function NetworkMap() {
-  const { preview, peers, neighbours, localId, links, error, bluetooth, device, nearby } = useMesh(),
+  const { preview, peers, neighbours, localId, links, graph, custody, error, bluetooth, device, nearby } = useMesh(),
     [search, setSearch] = useState(""),
     [selected, setSelected] = useState<Person | null>(null),
     [selectedSelf, setSelectedSelf] = useState(false);
   const camera = useRef<MapCamera>(null);
+  const discovery = useNetworkDiscovery();
+  const [joinRequest, setJoinRequest] = useState<{ meshId: string; sequence: number }>();
   const clearSelection = () => { setSelected(null); setSelectedSelf(false); };
   // Relay devices that were found nearby but are not connected yet appear as muted "discovered" nodes.
   const candidates = nearby.items.filter(item => item.relay && item.deviceId && !item.peerConnected
@@ -99,8 +102,13 @@ export function NetworkMap() {
   const discoveredCount = new Set([
     ...nearby.items.filter(item => item.relay && !item.peerConnected && item.state !== "CONNECTED" && item.deviceId).map(item => item.deviceId),
     ...(bluetooth?.nearby || []).filter(item => item.relayDevice && !neighbours.includes(item.relayDevice)).map(item => item.relayDevice),
+    ...discovery.devices.filter(d => d.deviceId !== localId && d.deviceId !== discovery.visibility?.deviceId && !peers.some(p => p.id === d.deviceId)).map(d => d.deviceId),
   ]).size;
-  const around = [...peers, ...discovered];
+  const publicDevices: Person[] = [...new Set(discovery.devices.map(d => d.deviceId))]
+    .filter(id => id !== localId && id !== discovery.visibility?.deviceId && !peers.some(p => p.id === id) && !discovered.some(p => p.id === id))
+    .map(id => { const d = discovery.devices.find(d => d.deviceId === id)!; return { id, name: d.name, detail: d.meshId ? `Unverified · ${d.meshId}` : "Unverified device · Not in a mesh", tone: "muted", status: "DISCOVERED" }; });
+  const meshNodes: Person[] = [...new Set(discovery.meshes.map(m => m.meshId))].map(id => ({ id: `mesh/${id}`, name: id, detail: "Unverified mesh · Select to join", tone: "gold-text", status: "MESH" }));
+  const around = [...peers, ...discovered, ...publicDevices, ...meshNodes];
   const nodes = preview
     ? sample
     : [
@@ -123,6 +131,11 @@ export function NetworkMap() {
       ];
   const activeMethods = [...new Set(Object.values(links))].map(transportLabel).join(" · ");
   const selfNode = nodes[0];
+  function inspect(p: Person) {
+    setSelected(p); setSelectedSelf(p.id === selfNode.id);
+    if (p.status === "MESH") setJoinRequest({ meshId: p.name, sequence: Date.now() });
+  }
+  const selectedPublic = discovery.devices.find(d => d.deviceId === selected?.id);
   const selectedIsSelf = !!selected && selectedSelf;
   const selectedIsDiscovered = !!selected && selected.status === "DISCOVERED";
   const edges = preview
@@ -140,6 +153,14 @@ export function NetworkMap() {
         .slice(1)
         .filter((p) => neighbours.includes(p.id))
         .map((p) => [0, nodes.indexOf(p), "gold"]);
+  if (!preview) {
+    const existing = new Set(edges.map(([a,b]) => [nodes[Number(a)].id, nodes[Number(b)].id].sort().join("/")));
+    for (const member of graph) for (const peer of Object.keys(member.links)) {
+      const a = nodes.findIndex(n => n.id === member.deviceId), b = nodes.findIndex(n => n.id === peer);
+      const key = [member.deviceId, peer].sort().join("/");
+      if (a >= 0 && b >= 0 && !existing.has(key)) { edges.push([a,b,member.reachable ? "cyan" : "muted"]); existing.add(key); }
+    }
+  }
   return (
     <section className="map-page">
       <div className="map-heading">
@@ -165,7 +186,7 @@ export function NetworkMap() {
           icon="search-icon-3"
         />
         {search.trim() && <div className="map-search-results" role="group" aria-label="Found devices">
-          {nodes.filter(p => p.name.toLowerCase().includes(search.trim().toLowerCase()) || p.id.toLowerCase().includes(search.trim().toLowerCase())).map(p => <button className="button" key={p.id} onClick={() => { setSelected(p); setSelectedSelf(p.id === selfNode.id); camera.current?.centerOn(p.x!, p.y!); }}><span>{p.name}</span><small>{p.detail}</small><span aria-hidden="true">↗</span></button>)}
+          {nodes.filter(p => p.name.toLowerCase().includes(search.trim().toLowerCase()) || p.id.toLowerCase().includes(search.trim().toLowerCase())).map(p => <button className="button" key={p.id} onClick={() => { inspect(p); camera.current?.centerOn(p.x!, p.y!); }}><span>{p.name}</span><small>{p.detail}</small><span aria-hidden="true">↗</span></button>)}
           {!nodes.some(p => p.name.toLowerCase().includes(search.trim().toLowerCase()) || p.id.toLowerCase().includes(search.trim().toLowerCase())) && <p>No devices found. Try another name.</p>}
         </div>}
       </div>
@@ -208,11 +229,11 @@ export function NetworkMap() {
                 left: `${(p.x! / 1050) * 100}%`,
                 top: `${(p.y! / 760) * 100}%`,
               }}
-              onClick={() => { setSelected(p); setSelectedSelf(p.id === selfNode.id); }}
+              onClick={() => inspect(p)}
               aria-label={`Inspect ${p.name}`}
             >
               <span className="device-tile">
-                <Icon
+                {p.status === "MESH" ? <ConnectionGlyph kind="mesh" /> : <Icon
                   name={
                     i === 0
                       ? "phone-icon"
@@ -226,7 +247,7 @@ export function NetworkMap() {
                               ? "phone-icon-3"
                               : "phone-icon-2"
                   }
-                />
+                />}
                 <i />
               </span>
               <b>{p.name}</b>
@@ -258,18 +279,20 @@ export function NetworkMap() {
         <div className="map-key-items">
           {(preview
             ? [["gold-text", "Direct link"], ["cyan", "Via another device"], ["green", "Alternative route"], ["red", "Link unavailable"], ["muted", "Nearby device"]]
-            : [["gold-text", "Direct link"], ["muted", "Nearby device"]]
+            : [["gold-text", "Direct link"], ["cyan", "Via another device"], ["muted", "Nearby device"]]
           ).map(([tone, label]) => <span key={label}><i className={tone} aria-hidden="true" />{label}</span>)}
         </div>
         <p className="map-key-note">Shows connections, not exact locations.</p>
       </div>
       </div>
       <aside className="network-inspector">
+        <MeshMembership showPeers={!selected} joinRequest={joinRequest} onDiscoveryRefresh={discovery.reload} discoveredDevices={discovery.devices.filter(d => d.deviceId !== localId && d.deviceId !== discovery.visibility?.deviceId)} overview={<>
+        <MapVisibility discovery={discovery} />
         <div className="row between">
           <Eyebrow>{selected ? "DEVICE DETAILS" : "NETWORK OVERVIEW"}</Eyebrow>
           {selected && <button className="button inspector-back" aria-label="Reset inspector" onClick={() => { setSelected(null); setSelectedSelf(false); }}>Overview</button>}
         </div>
-        <div className="mesh-identity">
+        {selected && <div className="mesh-identity">
           <span className="overview-symbol"><ConnectionGlyph kind="mesh" /></span>
           <div>
             <h2>{selected?.name || "Your connections"}</h2>
@@ -277,27 +300,29 @@ export function NetworkMap() {
               {selected?.detail ||
                 (preview
                   ? "Example of a mixed-transport mesh"
-                  : neighbours.length ? `Active links: ${activeMethods}` : error ? "Local service unavailable" : "Choose a method to connect nearby devices")}
+                  : neighbours.length ? `Active links: ${activeMethods}` : error ? "See mesh status below" : "Choose a method to connect nearby devices")}
             </p>
           </div>
-        </div>
-        <div className="badge-row">
+        </div>}
+        {!selected && <p className="network-link-summary">{preview ? "Example connections" : neighbours.length ? `Active links: ${activeMethods}` : "No active connections yet"}</p>}
+        {selected && <div className="badge-row">
           <Badge tone={preview || neighbours.length ? "green" : "muted"}>{selected?.status || (preview ? "Preview mesh" : neighbours.length ? "Connected" : "No active links")}</Badge>
           <Badge tone="cyan">{preview ? "Preview only" : "Offline mesh"}</Badge>
-        </div>
-        {selectedIsSelf && <VisibilityCard />}
-        {selectedIsDiscovered && <ConnectCard id={selected!.id} fallbackName={selected!.name} />}
+        </div>}
+        {selectedIsSelf && <p className="hint">Use the visibility switch in the Your device card. Hiding this device also leaves the mesh.</p>}
+        {selectedIsDiscovered && (selectedPublic ? <p className="hint">This name is unverified until password authentication succeeds. {selectedPublic.meshId ? `This device advertises ${selectedPublic.meshId}. Select that mesh to join with its password.` : "This visible Relay device has not joined a mesh. Create or join a mesh on that device to exchange messages."}</p> : <ConnectCard id={selected!.id} fallbackName={selected!.name} />)}
         <hr />
         <div className="network-metrics">
           <div><Eyebrow>DIRECT LINKS</Eyebrow><strong>{preview ? 3 : neighbours.length}</strong><small>connected to you</small></div>
-          <div><Eyebrow>VIA RELAYS</Eyebrow><strong>{preview ? 2 : peers.filter(p => p.status === "ALIVE" && p.detail.startsWith("Via ")).length}</strong><small>reachable devices</small></div>
+          <div><Eyebrow>VIA RELAYS</Eyebrow><strong>{preview ? 2 : peers.filter(p => p.status === "ALIVE" && !neighbours.includes(p.id)).length}</strong><small>reachable devices</small></div>
           <div className="discovery-summary"><i className="status-dot cyan" /><span>{preview ? "1 Relay device nearby" : `${discoveredCount} Relay device${discoveredCount === 1 ? "" : "s"} discovered`}</span></div>
         </div>
-        <MeshMembership showPeers={!selected} />
+        {!preview && custody && <div className="mesh-custody-status"><b>{custody.available ? `${custody.pending || 0} items waiting to forward` : "Persistent forwarding unavailable"}</b>{custody.error && <p>{custody.error}</p>}<Link href="/settings/">Temporary storage settings</Link></div>}
+        </>} />
         {preview && <details className="network-history"><summary>Preview network events</summary>
           <div className="events">{[["Route restored", "Kasun ↔ Ravi"], ["Link unavailable", "Nimal ↔ Peer 07"]].map(([title, detail]) => <div className="event" key={title}><i className="status-dot green" /><div><b>{title}</b><small>{detail}</small></div></div>)}</div>
         </details>}
-        {selected && (
+        {selected && !["DISCOVERED", "MESH"].includes(selected.status) && (
           <Link className="button" href="/messages/">
             Open messages
           </Link>

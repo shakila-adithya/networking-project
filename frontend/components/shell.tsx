@@ -3,6 +3,7 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { MeshProvider, useMesh, transportLabel } from "@/lib/mesh";
 import { Icon } from "./ui";
+import { ConnectionGlyph } from "./connection-glyph";
 export function Shell({ children }: { children: React.ReactNode }) {
   return (
     <MeshProvider>
@@ -12,7 +13,7 @@ export function Shell({ children }: { children: React.ReactNode }) {
 }
 function Chrome({ children }: { children: React.ReactNode }) {
   const path = usePathname(),
-    { preview, setPreview, peers, links, error } = useMesh();
+    { preview, setPreview, peers, links, error, connectionNotice } = useMesh();
   const nav = [
     [
       "/",
@@ -86,6 +87,11 @@ function Chrome({ children }: { children: React.ReactNode }) {
 
         </div>
       </header>
+      {!preview && connectionNotice && <div className="connection-notice" role="status">
+        <span className="connection-notice-icon" aria-hidden="true"><ConnectionGlyph kind="mesh" /></span>
+        <div><strong>{connectionNotice === "starting" ? "Connecting to your mesh" : "Ready to join a mesh"}</strong><p>{connectionNotice === "starting" ? "Relay is starting your connections. Your network status will update shortly." : path === "/" ? "Choose a nearby mesh or create your own using the sidebar." : "Open the Network map to find a nearby mesh or create your own."}</p></div>
+        {connectionNotice === "not-joined" && path !== "/" && <Link className="button secondary" href="/">Open Network map <span aria-hidden="true">↗</span></Link>}
+      </div>}
       {!preview && error && (
         <div className="api-error" role="alert">
           {error} <Link href="/settings/">Open Settings</Link>

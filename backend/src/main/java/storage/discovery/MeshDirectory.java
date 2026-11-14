@@ -19,6 +19,15 @@ public final class MeshDirectory implements AutoCloseable {
     public record Advertisement(String protocol, String meshId, String peerId, int peerPort) { }
     public record NearbyMesh(String meshId, String peerId, String address, int peerPort,
                              long seenAt, boolean verified) { }
+    public record DeviceAdvertisement(String protocol, String deviceId, String displayName, String meshId, int peerPort, boolean visible) { }
+    public record NearbyDevice(String deviceId, String displayName, String meshId, String address, int peerPort, long seenAt, boolean verified) { }
+    private final Map<String, NearbyDevice> devices = new ConcurrentHashMap<>();
+    private Supplier<DeviceAdvertisement> identity;
+    public void identity(Supplier<DeviceAdvertisement> supplier) { identity = supplier; }
+    public List<NearbyDevice> devices() {
+        devices.values().removeIf(d -> System.currentTimeMillis() - d.seenAt() > 20000);
+        return devices.values().stream().sorted(Comparator.comparing(NearbyDevice::deviceId)).toList();
+    }
     private final Map<String, NearbyMesh> nearby = new ConcurrentHashMap<>();
     @FunctionalInterface interface NetworkInterfaces { List<NetworkInterface> get() throws SocketException; }
     private final NetworkInterfaces networkInterfaces;
@@ -64,7 +73,27 @@ public final class MeshDirectory implements AutoCloseable {
     public boolean accept(byte[] bytes, InetAddress source) {
         if (bytes.length > 2048 || source == null || source.isAnyLocalAddress() || source.isMulticastAddress()) return false;
         try {
-            Advertisement a = JSON.readValue(bytes, Advertisement.class);
+            var tree = JSON.readTree(bytes);
+            if (tree != null && "Relay-device-v3".equals(tree.path("protocol").asText())) {
+                DeviceAdvertisement d = JSON.treeToValue(tree, DeviceAdvertisement.class);
+                if (d.deviceId() == null || !d.deviceId().matches("[A-Za-z0-9_-]{1,40}") || d.displayName() == null
+                        || d.displayName().codePointCount(0, d.displayName().length()) > 32
+                        || d.displayName().codePoints().anyMatch(Character::isISOControl) || d.meshId() == null
+                        || !d.meshId().isEmpty() && !d.meshId().matches("[A-Za-z0-9_.-]{1,80}")) return false;
+                if (identity != null && identity.get() != null && d.deviceId().equals(identity.get().deviceId())) return false;
+                if (!d.meshId().isEmpty() && (d.peerPort() < 1 || d.peerPort() > 63535)) return false;
+                String key = d.deviceId() + "/" + source.getHostAddress();
+                if (!d.visible()) {
+                    devices.remove(key);
+                    nearby.values().removeIf(n -> n.peerId().equals(d.deviceId()) && n.address().equals(source.getHostAddress()));
+                    return true;
+                }
+                if (devices.size() >= 256 && !devices.containsKey(key)) return false;
+                devices.put(key, new NearbyDevice(d.deviceId(), d.displayName(), d.meshId(), source.getHostAddress(), d.peerPort(), System.currentTimeMillis(), false));
+                if (!d.meshId().isEmpty()) accept(JSON.writeValueAsBytes(new Advertisement("Relay-v2", d.meshId(), d.deviceId(), d.peerPort())), source);
+                return true;
+            }
+            Advertisement a = JSON.treeToValue(tree, Advertisement.class);
             if (!"Relay-v2".equals(a.protocol()) || a.meshId() == null || !a.meshId().matches("[A-Za-z0-9_.-]{1,80}")
                     || a.peerId() == null || !a.peerId().matches("[A-Za-z0-9_-]{1,40}") || a.peerPort() < 1 || a.peerPort() > 63535) return false;
             PeerConfiguration local = configuration.get();
@@ -102,6 +131,11 @@ public final class MeshDirectory implements AutoCloseable {
         if (closed || socket == null) return;
         try { refreshInterfaces(); } catch (IOException e) { interfaceError = "Cannot refresh network interfaces: " + e.getMessage(); }
         PeerConfiguration c = configuration.get();
+        if (identity != null) {
+            DeviceAdvertisement d = identity.get();
+            if (d != null && d.visible()) announce(d);
+            return;
+        }
         if (c == null) announceError = "";
         if (closed || c == null || socket == null) return;
         try {
@@ -112,6 +146,18 @@ public final class MeshDirectory implements AutoCloseable {
                 socket.send(new DatagramPacket(bytes, bytes.length, InetAddress.getByName(GROUP), PORT));
             }
         } catch (IOException e) { announceError = "Cannot announce mesh: " + e.getMessage(); }
+    }
+    /** Visibility withdrawal is a best-effort hint; expiry handles lost datagrams. */
+    public synchronized void announce(DeviceAdvertisement device) {
+        if (socket == null || closed) return;
+        try {
+            byte[] bytes = JSON.writeValueAsBytes(device);
+            for (NetworkInterface nic : interfaces) {
+                socket.setOption(StandardSocketOptions.IP_MULTICAST_IF, nic);
+                socket.send(new DatagramPacket(bytes, bytes.length, InetAddress.getByName(GROUP), PORT));
+            }
+            announceError = "";
+        } catch (IOException e) { announceError = "Cannot announce visible device: " + e.getMessage(); }
     }
     public void close() {
         closed = true; timer.shutdownNow();
