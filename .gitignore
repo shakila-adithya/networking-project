@@ -24,3 +24,5 @@ frontend/test-results/
 frontend/playwright-report/
 backend/config/bluetooth-restore.properties
 backend/config/device-profile.json
+
+backend/config/local-setup.json.left

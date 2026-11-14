@@ -22,7 +22,11 @@ class LocalOnlyGuardTest {
     Path root;
 
     private static int status(int port, String method, String path, String host, String body) throws Exception {
-        try (Socket socket = new Socket("127.0.0.1", port)) {
+        return statusAt("127.0.0.1", port, method, path, host, body);
+    }
+    private static int statusAt(String address, int port, String method, String path, String host, String body) throws Exception {
+        try (Socket socket = new Socket(address, port)) {
+            socket.setSoTimeout(3000);
             String request = method + " " + path + " HTTP/1.1\r\nHost: " + host + "\r\nConnection: close\r\n"
                     + "Content-Type: application/json\r\nContent-Length: " + body.getBytes(StandardCharsets.UTF_8).length
                     + "\r\n\r\n" + body;
@@ -49,9 +53,23 @@ class LocalOnlyGuardTest {
                 assertEquals(503, status(port, "POST", path, local, "{}"),
                         "this laptop passes the guard (and finds no running node here): " + path);
             }
-            // reading is not restricted by the guard
-            assertEquals(503, status(port, "GET", "/api/device", foreign, ""));
-            assertEquals(503, status(port, "GET", "/api/nearby", foreign, ""));
+            for (String path : List.of("/api/setup/device", "/api/setup/network"))
+                assertEquals(403, status(port, "POST", path, foreign, "{}"));
+            assertEquals(403, status(port, "GET", "/api/setup/device", foreign, ""));
+            // Device APIs are local too: remote pages must not inspect or change local connection state.
+            assertEquals(403, status(port, "GET", "/api/device", foreign, ""));
+            assertEquals(403, status(port, "GET", "/api/nearby", foreign, ""));
+        }
+    }
+    @Test void aLanSourceCannotBypassTheGuardWithALocalhostHeader() throws Exception {
+        var networks = storage.config.LocalNetworks.detect();
+        org.junit.jupiter.api.Assumptions.assumeFalse(networks.isEmpty(), "No local LAN address for the source-address check");
+        try (var agent = new SetupAgent(0, new SetupConfigStore(root.resolve("lan.json")), root, List::of)) {
+            agent.start();
+            for (String path : List.of("/api/device", "/api/membership/create", "/api/radio/hotspot", "/api/setup/device", "/api/setup/network")) {
+                assertEquals(403, statusAt(networks.getFirst().address(), agent.port(), "POST", path,
+                        "localhost:" + agent.port(), "{}"));
+            }
         }
     }
 }

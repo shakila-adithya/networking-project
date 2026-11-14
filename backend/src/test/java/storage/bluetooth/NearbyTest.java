@@ -51,4 +51,14 @@ class NearbyTest {
             assertEquals("id_1", back.relayDeviceId().orElseThrow(), name);
         }
     }
+    @Test void meshAdvertisementRoundTripsPublicIdentifiersWithinTheBluetoothNameBound() {
+        for (String name : new String[]{"", "Maya", "මායා 📱", "📱".repeat(20)}) {
+            String advertised = Nearby.advertisedMeshName(name, "device_1", "m".repeat(80));
+            assertTrue(advertised.getBytes(java.nio.charset.StandardCharsets.UTF_8).length <= 240);
+            var nearby = new Nearby("AA:BB:CC:DD:EE:01", advertised, -60, false);
+            assertEquals("device_1", nearby.relayDeviceId().orElseThrow());
+            assertEquals("m".repeat(80), nearby.meshId().orElseThrow());
+        }
+        assertTrue(new Nearby("a", "relay:B [mesh:bad mesh]", null, false).meshId().isEmpty());
+    }
 }

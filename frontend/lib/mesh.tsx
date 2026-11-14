@@ -46,7 +46,7 @@ export type DeviceInfo = {
   };
 };
 export type NearbyItem = {
-  kind: "bluetooth" | "lan";
+  kind: "bluetooth" | "lan" | "tcp" | "hotspot" | "wifi-direct";
   deviceId: string | null;
   name: string;
   address: string;
@@ -56,6 +56,7 @@ export type NearbyItem = {
   state: "CONNECTED" | "AVAILABLE" | "FAILED" | "OTHER";
   error: string;
   hops: number | null;
+  peerConnected?: boolean;
 };
 export type Nearby = {
   bluetoothAvailable: boolean;
@@ -87,7 +88,7 @@ const previewNearby: Nearby = {
 export function transportLabel(kind: string) {
   return String(kind || "tcp")
     .split("+")
-    .map((k) => (k.toLowerCase() === "bluetooth" ? "Bluetooth" : k.toUpperCase()))
+    .map((k) => ({ bluetooth: "Bluetooth", "wifi-direct": "Wi-Fi Direct", hotspot: "Hotspot", unknown: "Transport not reported", memory: "Simulation" }[k.toLowerCase()] || k.toUpperCase()))
     .join(" + ");
 }
 export type Route = {
@@ -139,7 +140,7 @@ export async function request(path: string, options?: RequestInit) {
   const data = await r.json().catch(() => ({}));
   if (!r.ok)
     throw new Error(
-      data.message || "Local node unavailable. Open Settings to configure it.",
+      data.message || "Can't reach Relay on this device. Start or restart Relay, then try again.",
     );
   return data;
 }
@@ -150,6 +151,7 @@ type State = {
   files: StoredFile[];
   inbox: Chat[];
   neighbours: string[];
+  links: Record<string, string>;
   localId: string;
   transport: string;
   bluetooth: BluetoothInfo | null;
@@ -161,7 +163,7 @@ type State = {
   saveDevice: (patch: { displayName?: string; visible?: boolean }) => Promise<void>;
   scanNearby: () => Promise<void>;
   /** Connects to a nearby Relay device by its id. Throws an Error with a readable message on failure. */
-  connectNearby: (deviceId: string) => Promise<void>;
+  connectNearby: (deviceId: string, address?: string) => Promise<void>;
   error: string;
   refresh: () => Promise<void>;
 };
@@ -172,6 +174,7 @@ export function MeshProvider({ children }: { children: React.ReactNode }) {
     [files, setFiles] = useState<StoredFile[]>([]),
     [inbox, setInbox] = useState<Chat[]>([]),
     [neighbours, setNeighbours] = useState<string[]>([]),
+    [links, setLinks] = useState<Record<string, string>>({}),
     [localId, setLocalId] = useState("You"),
     [transport, setTransport] = useState("TCP"),
     [bluetooth, setBluetooth] = useState<BluetoothInfo | null>(null),
@@ -193,7 +196,7 @@ export function MeshProvider({ children }: { children: React.ReactNode }) {
       const health = await request("/health");
       setError("");
       const byId = new Map<string, Person>();
-      for (const p of health.peers.filter(
+      for (const p of (health.peers || []).filter(
         (p: any) => p.source !== "local" && p.kind !== "local",
       )) {
         const id = p.id || p.peerId;
@@ -211,7 +214,8 @@ export function MeshProvider({ children }: { children: React.ReactNode }) {
       try {
         const m = await request("/mesh");
         names = m.names || {};
-        const links: Record<string, string> = m.links || {};
+        const links: Record<string, string> = Object.fromEntries((m.neighbours || []).map((id: string) => [id, m.links?.[id] || "unknown"]));
+        setLinks(links);
         setLocalId(m.deviceId);
         setDeviceName(m.deviceName || m.deviceId);
         setInbox(m.inbox || []);
@@ -224,7 +228,7 @@ export function MeshProvider({ children }: { children: React.ReactNode }) {
         for (const id of (m.neighbours || []) as string[]) {
           byId.set(id, {
             ...base(id),
-            detail: `Direct ${transportLabel(links[id] || m.transport)} link`,
+            detail: `Direct ${transportLabel(links[id])} link`,
             tone: "green",
             status: "ALIVE",
           });
@@ -242,6 +246,7 @@ export function MeshProvider({ children }: { children: React.ReactNode }) {
         }
       } catch {
         setNeighbours([]);
+        setLinks({});
       }
       // Friendly names learned from the mesh replace raw ids (the id stays in Person.id for API calls).
       setPeers([...byId.values()].map((p) => ({ ...p, name: names[p.id] || p.name })));
@@ -256,6 +261,7 @@ export function MeshProvider({ children }: { children: React.ReactNode }) {
         setNearby(noNearby);
       }
     } catch (e) {
+      setNeighbours([]); setLinks({}); setPeers([]); setDevice(null); setBluetooth(null); setNearby(noNearby);
       setError((e as Error).message);
     }
   }, []);
@@ -320,19 +326,19 @@ export function MeshProvider({ children }: { children: React.ReactNode }) {
     setNearby((n) => ({ ...n, scanning: true }));
   }, [preview]);
   const connectNearby = useCallback(
-    async (deviceId: string) => {
+    async (deviceId: string, address?: string) => {
       if (preview) {
         await new Promise((r) => setTimeout(r, 800));
         setPreviewNear((n) => ({
           ...n,
-          items: n.items.map((i) => (i.deviceId === deviceId ? { ...i, state: "CONNECTED", hops: 1 } : i)),
+          items: n.items.map((i) => (i.deviceId === deviceId && (!address || i.address === address) ? { ...i, state: "CONNECTED", hops: 1 } : i)),
         }));
         return;
       }
       await request("/mesh/connect", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ deviceId }),
+        body: JSON.stringify(address ? { deviceId, candidateAddress: address } : { deviceId }),
       });
       await refresh();
     },
@@ -347,6 +353,7 @@ export function MeshProvider({ children }: { children: React.ReactNode }) {
         files,
         inbox,
         neighbours,
+        links: preview ? { M: "bluetooth", N: "tcp", K: "hotspot" } : links,
         localId,
         transport,
         bluetooth,

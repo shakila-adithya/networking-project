@@ -111,4 +111,16 @@ class BluetoothScannerTest {
         assertEquals(2, scans.get());
         scanner.close();
     }
+    @Test void onlyOffersUnverifiedCandidatesAdvertisingTheSelectedMesh() {
+        TopologyController topology = controller();
+        BluetoothDiscovery discovery = duration -> List.of(
+                new Nearby("AA:BB:CC:DD:EE:01", Nearby.advertisedMeshName("B", "B", "chosen"), -50, false),
+                new Nearby("AA:BB:CC:DD:EE:02", Nearby.advertisedMeshName("C", "C", "other"), -40, false),
+                new Nearby("AA:BB:CC:DD:EE:03", "relay:D", -40, false));
+        var scanner = new BluetoothScanner(discovery, topology, "A", Duration.ofSeconds(1), Duration.ofSeconds(30), "chosen");
+        scanner.scanOnce();
+        assertEquals(1, topology.status().size());
+        assertEquals("B", topology.status().getFirst().candidate().deviceId());
+        assertEquals(3, scanner.lastScan().size(), "Other meshes/devices remain visible as unverified discovery hints");
+    }
 }

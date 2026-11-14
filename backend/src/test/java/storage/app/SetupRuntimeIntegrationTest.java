@@ -45,7 +45,8 @@ class SetupRuntimeIntegrationTest {
                     .header("X-File-Name","test.bin").POST(HttpRequest.BodyPublishers.ofByteArray(data)).build(), HttpResponse.BodyHandlers.ofString());
             assertEquals(201, upload.statusCode());
             var uploaded = json.readTree(upload.body());
-            assertEquals("HEALTHY",uploaded.path("replicationStatus").asText());
+            assertFalse(uploaded.has("replicationStatus"));
+            assertFalse(uploaded.has("replicaCount"));
             String fileId = uploaded.path("fileId").asText();
             var download = client.send(HttpRequest.newBuilder(URI.create(base+"/api/files/"+fileId+"/download")).GET().build(),HttpResponse.BodyHandlers.ofByteArray());
             assertArrayEquals(data,download.body());

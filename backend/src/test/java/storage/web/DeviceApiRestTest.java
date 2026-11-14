@@ -19,7 +19,8 @@ import java.util.Map;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
-import storage.cluster.ReplicationManager;
+import storage.cluster.PeerEndpoint;
+import storage.cluster.PeerRegistry;
 import storage.files.FileStore;
 import storage.link.HeartbeatManager;
 import storage.messaging.ChatService;
@@ -100,10 +101,10 @@ class DeviceApiRestTest {
         try (ServerSocket socket = new ServerSocket(0)) {
             port = socket.getLocalPort();
         }
-        List<ReplicationManager.PeerEndpoint> peers = List.of(new ReplicationManager.PeerEndpoint("C", "127.0.0.1", port));
+        List<PeerEndpoint> peers = List.of(new PeerEndpoint("C", "127.0.0.1", port));
         HeartbeatManager heartbeat = new HeartbeatManager("C", peers);
         RestApiServer server = new RestApiServer("127.0.0.1", 0, "C", "127.0.0.1", port, store, heartbeat,
-                new ReplicationManager("C", peers));
+                new PeerRegistry("C", peers));
         closeables.add(node);
         closeables.add(files);
         closeables.add(chat);
@@ -187,5 +188,17 @@ class DeviceApiRestTest {
         JsonNode mesh = json.readTree(call(api, "GET", "/api/mesh", null).body());
         assertEquals("C", mesh.path("deviceName").asText(), "no name chosen: the id");
         assertTrue(mesh.has("names"));
+    }
+    @Test void rejectsCrossOriginDeviceChangesBeforeCallingService() throws Exception {
+        StubDevice device = new StubDevice();
+        RestApiServer api = api(device);
+        for (String path : List.of("/api/device", "/api/bluetooth/scan", "/api/mesh/connect")) {
+            var request = HttpRequest.newBuilder(URI.create("http://127.0.0.1:" + api.port() + path))
+                    .header("Origin", "https://attacker.example")
+                    .header("Content-Type", "application/json").POST(HttpRequest.BodyPublishers.ofString("{}"));
+            assertEquals(403, client.send(request.build(), HttpResponse.BodyHandlers.ofString()).statusCode());
+        }
+        assertEquals("", device.name);
+        assertTrue(device.connected.isEmpty());
     }
 }

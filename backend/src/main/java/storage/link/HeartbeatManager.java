@@ -1,6 +1,6 @@
 package storage.link;
 
-import storage.cluster.ReplicationManager;
+import storage.cluster.PeerEndpoint;
 import storage.transport.PeerClient;
 import java.io.IOException;
 import java.time.Duration;
@@ -38,15 +38,21 @@ public final class HeartbeatManager implements AutoCloseable {
     private volatile boolean closed;
     private ScheduledFuture<?> scheduledTask;
 
+    public HeartbeatManager(String localPeerName, List<PeerEndpoint> peers, storage.security.MeshSecurity security) {
+        this(localPeerName, peers, DEFAULT_INTERVAL, DEFAULT_FAILURE_THRESHOLD,
+                peer -> PeerClient.authenticated(security, () -> "PONG".equals(PeerClient.ping(
+                        peer.host(), peer.port(), DEFAULT_CONNECT_TIMEOUT_MILLIS, 15000))), System.out::println);
+    }
+
     public HeartbeatManager(String localPeerName,
-                            List<ReplicationManager.PeerEndpoint> configuredPeers) {
+                            List<PeerEndpoint> configuredPeers) {
         this(localPeerName, configuredPeers, DEFAULT_INTERVAL,
                 DEFAULT_FAILURE_THRESHOLD,
                 defaultProbe(DEFAULT_CONNECT_TIMEOUT_MILLIS), System.out::println);
     }
 
     public HeartbeatManager(String localPeerName,
-                            List<ReplicationManager.PeerEndpoint> configuredPeers,
+                            List<PeerEndpoint> configuredPeers,
                             Duration interval,
                             int connectTimeoutMillis,
                             int failureThreshold) {
@@ -55,7 +61,7 @@ public final class HeartbeatManager implements AutoCloseable {
     }
 
     public HeartbeatManager(String localPeerName,
-                     List<ReplicationManager.PeerEndpoint> configuredPeers,
+                     List<PeerEndpoint> configuredPeers,
                      Duration interval,
                      int failureThreshold,
                      HeartbeatProbe probe,
@@ -145,7 +151,7 @@ public final class HeartbeatManager implements AutoCloseable {
                 .forEach(this::checkPeer);
     }
 
-    private void checkPeer(ReplicationManager.PeerEndpoint peer) {
+    private void checkPeer(PeerEndpoint peer) {
         boolean alive;
         try {
             alive = probe.isAlive(peer);
@@ -195,7 +201,7 @@ public final class HeartbeatManager implements AutoCloseable {
     }
 
     /** Adds discovered endpoints and refreshes changed addresses without resetting existing peer state unnecessarily. */
-    public void refreshPeers(List<ReplicationManager.PeerEndpoint> configuredPeers) {
+    public void refreshPeers(List<PeerEndpoint> configuredPeers) {
         Objects.requireNonNull(configuredPeers).stream()
                 .filter(peer -> !peer.name().equals(localPeerName))
                 .forEach(peer -> statuses.compute(peer.name(), (name, previous) -> {
@@ -241,19 +247,19 @@ public final class HeartbeatManager implements AutoCloseable {
         DEAD
     }
 
-    public record PeerStatus(ReplicationManager.PeerEndpoint peer,
+    public record PeerStatus(PeerEndpoint peer,
                              PeerState state,
                              int consecutiveFailures,
                              Instant lastCheckedAt,
                              Instant lastSuccessfulAt) {
     }
 
-    public record PeerTransition(ReplicationManager.PeerEndpoint peer,
+    public record PeerTransition(PeerEndpoint peer,
                                  PeerState previousState, PeerState currentState,
                                  Instant at) { }
 
     @FunctionalInterface
     public interface HeartbeatProbe {
-        boolean isAlive(ReplicationManager.PeerEndpoint peer) throws IOException;
+        boolean isAlive(PeerEndpoint peer) throws IOException;
     }
 }

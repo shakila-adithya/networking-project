@@ -14,6 +14,7 @@ public record Nearby(String address, String name, Integer rssi, boolean paired) 
     public static final String NAME_PREFIX = "relay:";
     /** "Maya's laptop [relay:C]": a friendly name followed by the id in brackets (the name part is optional). */
     private static final Pattern NAMED = Pattern.compile("^(.*?)\\s*\\[relay:([A-Za-z0-9_-]{1,40})\\]$");
+    private static final Pattern MESH = Pattern.compile("^(.*?)\\s+\\[mesh:([A-Za-z0-9_.-]{1,80})\\]$");
     private static final int MAX_FRIENDLY_LENGTH = 32;
 
     /**
@@ -28,17 +29,35 @@ public record Nearby(String address, String name, Integer rssi, boolean paired) 
         return clean.isEmpty() ? NAME_PREFIX + deviceId : clean + " [" + NAME_PREFIX + deviceId + "]";
     }
 
+    /** Public mesh hint only; authentication must succeed before trusting either identity. */
+    public Optional<String> meshId() {
+        if (name == null) return Optional.empty();
+        Matcher matcher = MESH.matcher(name);
+        return matcher.matches() ? Optional.of(matcher.group(2)) : Optional.empty();
+    }
+    private String deviceName() {
+        if (name == null) return "";
+        Matcher matcher = MESH.matcher(name);
+        return matcher.matches() ? matcher.group(1) : name;
+    }
+    public static String advertisedMeshName(String displayName, String deviceId, String meshId) {
+        if (meshId == null || !meshId.matches("[A-Za-z0-9_.-]{1,80}")) throw new IllegalArgumentException("Invalid mesh ID");
+        String suffix = " [mesh:" + meshId + "]";
+        String wanted = advertisedName(displayName, deviceId) + suffix;
+        return wanted.getBytes(java.nio.charset.StandardCharsets.UTF_8).length <= 240 ? wanted : NAME_PREFIX + deviceId + suffix;
+    }
+
     /** The mesh device id if this is a Relay device, otherwise empty (headphones, phones, ...). */
     public Optional<String> relayDeviceId() {
         if (name == null) {
             return Optional.empty();
         }
-        Matcher named = NAMED.matcher(name);
+        Matcher named = NAMED.matcher(deviceName());
         if (named.matches()) {
             return Optional.of(named.group(2));
         }
-        if (name.startsWith(NAME_PREFIX)) { // legacy form: just "relay:<id>"
-            String id = name.substring(NAME_PREFIX.length());
+        if (deviceName().startsWith(NAME_PREFIX)) { // legacy form: just "relay:<id>"
+            String id = deviceName().substring(NAME_PREFIX.length());
             return id.matches("[A-Za-z0-9_-]{1,40}") ? Optional.of(id) : Optional.empty();
         }
         return Optional.empty();
@@ -49,7 +68,7 @@ public record Nearby(String address, String name, Integer rssi, boolean paired) 
         if (name == null) {
             return Optional.empty();
         }
-        Matcher named = NAMED.matcher(name);
+        Matcher named = NAMED.matcher(deviceName());
         return named.matches() && !named.group(1).isBlank() ? Optional.of(named.group(1)) : Optional.empty();
     }
 

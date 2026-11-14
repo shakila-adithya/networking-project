@@ -26,7 +26,7 @@ it travels hop by hop along the routes found by the router (see [routing.md](rou
   is only reachable through the mesh (neighbour or routed destination) is sent over the mesh and shows live progress,
   *Waiting for a route*, and a **Resume** button.
 * **Fallback:** if the direct TCP connection to a registered peer fails, the file is sent over the mesh instead
-  (also for automatic replicas: `ReplicationManager` reports `ROUTED_IN_PROGRESS`).
+  Only user-requested deliveries use this fallback; received files are never automatically replicated.
 * **REST:** `POST /api/files?recipient=<id>` (202 `TRANSFERRING` + transfer ids), `GET /api/mesh/transfers`,
   `GET /api/mesh/transfers/{id}`, `POST /api/mesh/transfers/{id}/resume`.
 * **Console:** `send-file <device-id> <path>`, `transfers`; received files print `[file] received ...`.
@@ -34,7 +34,6 @@ it travels hop by hop along the routes found by the router (see [routing.md](rou
   `-Dmesh.stallSeconds=<seconds>`.
 
 ## Limitations
-* Self-healing and reconciliation of stored files still use the direct IP inventory between registered peers; only
-  *sending* and the replica fallback are routed.
-* One thread per active outgoing transfer; 100 MB is the file size limit.
-* No application-level encryption (dropped from the plan).
+* Network routing and connection recovery do not create additional stored copies. Only the intended recipient commits a file; intermediate relays forward chunks.
+* One thread per active outgoing transfer; browser sends are limited to 100 MiB. The backend allows up to 2 GiB, with an additional 65,536-chunk bound (1 GiB at the default 16 KiB chunk size).
+* Application carriers use mesh-password authentication and hop-by-hop TLS authenticated encryption. Trusted relays can inspect forwarded plaintext; this is not end-to-end encryption against members.

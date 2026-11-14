@@ -111,7 +111,7 @@ export function Messages() {
             ))}
           {!peers.length && (
             <p className="empty">
-              No peers yet. Connect a device through Settings.
+              No devices yet. Open the Network map to join a mesh.
             </p>
           )}
         </div>
@@ -264,14 +264,14 @@ export function Messages() {
         <div className="profile">
           <Avatar name={name} size={64} gold />
           <h2>{name}</h2>
-          <p>Mesh device · Peer {person?.id || "—"}</p>
+          <p>{person ? `Mesh device · Peer ${person.id}` : "Choose a conversation to see its connection"}</p>
           <Badge tone="cyan">
             {preview ? "Via nearby devices" : person?.status || "Not connected"}
           </Badge>
         </div>
         <hr />
         <Eyebrow>LAST KNOWN ROUTE</Eyebrow>
-        <div className="route-avatars">
+        {person && (preview || person.status === "ALIVE") ? <div className="route-avatars">
           {(preview ? ["You", "Maya", name] : ["You", name]).map((n, i) => (
             <Fragment key={i}>
               {i > 0 && <Icon name="arrow-icon-3" />}
@@ -281,7 +281,7 @@ export function Messages() {
               </div>
             </Fragment>
           ))}
-        </div>
+        </div> : <p className="route-empty">No active route. Connect a device to get started.</p>}
         <Eyebrow>DELIVERY STATES</Eyebrow>
         <div className="delivery-states">
           {[
@@ -292,16 +292,12 @@ export function Messages() {
             <div className="event" key={title}>
               <i className={`status-dot ${tone}`} />
               <div>
-                <b>{title}</b>
+                <b className={`delivery-pill ${tone}`}>{title}</b>
                 <small>{desc}</small>
               </div>
             </div>
           ))}
         </div>
-        <Link className="button" href="/files/">
-          <Icon name="file-icon-3" />
-          Open shared files
-        </Link>
         <p className="footnote">Routes can change as devices join or leave.</p>
       </aside>
     </section>

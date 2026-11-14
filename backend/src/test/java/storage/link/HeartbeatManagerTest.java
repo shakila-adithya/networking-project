@@ -1,6 +1,6 @@
 package storage.link;
 
-import storage.cluster.ReplicationManager;
+import storage.cluster.PeerEndpoint;
 import storage.files.TransferResult;
 import storage.transport.PeerClient;
 import storage.transport.PeerServer;
@@ -30,7 +30,7 @@ class HeartbeatManagerTest {
     void successfulPingPongMarksReachablePeerAlive() throws Exception {
         int portB = freePort();
         Path storeB = temporaryDirectory.resolve("heartbeat-B");
-        List<ReplicationManager.PeerEndpoint> peers = List.of(
+        List<PeerEndpoint> peers = List.of(
                 endpoint("A", freePort()), endpoint("B", portB));
 
         try (PeerServer serverB = new PeerServer("127.0.0.1", portB, storeB);
@@ -107,11 +107,11 @@ class HeartbeatManagerTest {
     }
 
     @Test
-    void heartbeatMonitoringRemainsCompatibleWithReplication() throws Exception {
+    void heartbeatMonitoringDoesNotCopyUploadedFiles() throws Exception {
         int portA = freePort();
         int portB = freePort();
         int portC = freePort();
-        List<ReplicationManager.PeerEndpoint> peers = List.of(
+        List<PeerEndpoint> peers = List.of(
                 endpoint("A", portA), endpoint("B", portB), endpoint("C", portC));
         Path storeB = temporaryDirectory.resolve("compatible-B");
         Path storeC = temporaryDirectory.resolve("compatible-C");
@@ -120,7 +120,7 @@ class HeartbeatManagerTest {
         Files.write(source, content);
 
         try (PeerServer serverB = new PeerServer("127.0.0.1", portB, storeB,
-                     new ReplicationManager("B", peers));
+                     "B");
              PeerServer serverC = new PeerServer("127.0.0.1", portC, storeC);
              HeartbeatManager heartbeat = new HeartbeatManager("B", peers)) {
             serverB.start();
@@ -134,8 +134,8 @@ class HeartbeatManagerTest {
 
             TransferResult upload = PeerClient.upload("127.0.0.1", portB, source);
             assertTrue(upload.success(), upload.message());
-            Path replica = storeC.resolve("files").resolve(upload.fileId() + ".bin");
-            assertArrayEquals(content, Files.readAllBytes(replica));
+            assertArrayEquals(content, Files.readAllBytes(serverB.fileStore().open(upload.fileId()).contentPath()));
+            assertTrue(serverC.inventory().isEmpty());
         }
     }
 
@@ -152,12 +152,12 @@ class HeartbeatManagerTest {
                 probe, stateChanges::add);
     }
 
-    private static List<ReplicationManager.PeerEndpoint> twoPeers() {
+    private static List<PeerEndpoint> twoPeers() {
         return List.of(endpoint("A", 5100), endpoint("B", 5101));
     }
 
-    private static ReplicationManager.PeerEndpoint endpoint(String name, int port) {
-        return new ReplicationManager.PeerEndpoint(name, "127.0.0.1", port);
+    private static PeerEndpoint endpoint(String name, int port) {
+        return new PeerEndpoint(name, "127.0.0.1", port);
     }
 
     private static HeartbeatManager.PeerStatus onlyStatus(HeartbeatManager manager) {

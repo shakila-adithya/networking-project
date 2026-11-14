@@ -234,5 +234,9 @@
   "download-icon": {
     "width": 12,
     "height": 12
+  },
+  "settings-icon": {
+    "width": 18,
+    "height": 18
   }
 }

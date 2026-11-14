@@ -13,6 +13,8 @@ public interface Link extends AutoCloseable {
     /** Address of the neighbour as understood by the transport that created this link. */
     String remoteAddress();
 
+    default String kind() { return remoteAddress().startsWith("bt:") ? "bluetooth" : "tcp"; }
+
     /** Sends one frame. Throws IOException if the link is closed or the write fails. */
     void send(byte[] frame) throws IOException;
 

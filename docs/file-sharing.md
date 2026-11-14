@@ -1,11 +1,17 @@
-# Share files with a chosen peer or all connected peers
+# Share files with chosen recipients
 
-Update and restart Java on **every device** before using recipient-based sharing. Older versions reject the new optional metadata field; failed deliveries are reported rather than sent using legacy ring placement.
+Relay sends files to recipients selected by the user. There is no automatic backup replication or redistribution when a device disappears.
 
-In Files, select **Share with → Peer C** to send the selected files to C only. Choose **All connected peers (including this device)** to send to the currently registered ALIVE peers and keep a copy locally. Preview the files, check the recipient label, then confirm Upload. File storage appears on the recipient's local Files page. The sender's original file stays on their computer; the application does not store an extra sender copy for a different single recipient.
+In Share files, choose files and one or multiple recipients, then send. A file delivered to another device appears in that recipient's local Files list. The sender's original remains on their computer, but the application does not create a permanent received-file copy on the sender for a different single recipient.
 
-Completed uploads disappear from the progress list. A partial delivery stays visible with successful recipients and per-peer failure messages. New peers joining later are not retroactive recipients. If a selected peer is offline, the share fails; reconnect the peer and retry. Delivery to all uses a snapshot, so the results may include failures if a device disconnects during transfer.
+The API accepts `POST /api/files?recipient=C` or `?recipient=all`. All takes a snapshot of currently registered ALIVE peers and this device. Later arrivals receive nothing from earlier shares. The UI supports selecting multiple people individually. These are intentional deliveries, not backups.
 
-Explicit shares persist their selected recipient IDs in metadata. They use REPLICA_PUT to prevent ring replication, reject delivery to unselected peers, and are excluded from ordinary automatic replica repair/redistribution. Reconciliation reports SHARE_COMPLETE/SHARE_INCOMPLETE against that recipient list. A single-peer share intentionally has only one stored copy; losing it cannot be repaired from another peer. Failed shares are not automatically retried. Select all again to retry delivery (a fresh upload creates a new UUID).
+The backend uses direct TCP `PUT` for registered peers and falls back to routed mesh transfer if direct delivery fails. Mesh-only recipients can be selected once known by the mesh. Direct success is confirmed by the receiving peer. Mesh starts return 202 with transfer IDs; follow progress until DELIVERED or FAILED. Partial fan-out reports successful recipients and individual failures. An unreachable recipient is never reported as delivered; failed mesh transfers may be manually resumed while staging/state remain available.
 
-Legacy uploads with no `recipient` query keep the existing replication factor 2 and ring placement. Existing stored files are unchanged. The frontend passes `POST /api/files?recipient=C` or `?recipient=all`; the setup agent proxies the query unchanged. These options choose storage placement, not user access authorization: the existing trusted peer protocol still has no per-user access control or TLS.
+Selected recipient IDs remain in metadata, and receiving peers reject files addressed to other devices. This is placement validation. Application entry points now require mesh-password membership and TLS for direct TCP and mesh carriers; there is no individual-member ACL or end-to-end encryption against other mesh members.
+
+`GET /api/files` lists only local complete files. `GET /api/files/{id}/download` downloads the local file. `DELETE /api/files/{id}` removes only this device's copy; other recipients retain theirs. No background service restores a deleted file.
+
+Uploads without a recipient are local-only saves, retained for compatibility. Neither those uploads nor direct console `put` operations trigger additional deliveries. The old `REPLICA_PUT` command remains an alias for single-device `PUT`, with the same no-overwrite checks. New clients use `PUT`.
+
+Existing data and metadata remain readable and are not deleted during upgrade. Update all devices together, because old backends may still replicate an ordinary upload. REST responses no longer contain `replicaCount` or `replicationStatus`; sharing results keep `deliveredTo`, `failedPeers`, `transfers`, and `shareStatus`.

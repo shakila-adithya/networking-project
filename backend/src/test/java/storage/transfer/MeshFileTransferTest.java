@@ -126,6 +126,26 @@ class MeshFileTransferTest {
     }
 
     @Test
+    void receiverReportsProgressAndOnlyMarksReceivedAfterIntegrityVerification() throws Exception {
+        devices(config(20, 10_000), "A", "B");
+        link("A", "B");
+        byte[] data = randomBytes(500_000);
+        FileMetadata meta = metadata("receiving.bin", data, "B");
+        UUID id = send("A", "B", meta, data).transferId();
+        await(() -> services.get("B").incomingTransfers().stream().anyMatch(t -> t.transferId().equals(id) && t.percent() > 0 && t.percent() < 100));
+        var receiving = services.get("B").incomingTransfers().getFirst();
+        assertEquals("RECEIVING", receiving.state());
+        assertEquals("A", receiving.from());
+        assertEquals(meta.fileId(), receiving.fileId());
+        assertTrue(stores.get("B").inventory().isEmpty(), "Partial data is not yet a received file");
+        awaitState("A", id, TransferState.DELIVERED);
+        var received = services.get("B").incomingTransfers().getFirst();
+        assertEquals("RECEIVED", received.state());
+        assertEquals(100, received.percent());
+        assertStored("B", meta, data);
+    }
+
+    @Test
     void smallFileCrossesThreeHops() throws Exception {
         devices(config(0, 10_000), "A", "B", "C", "D");
         link("A", "B"); link("B", "C"); link("C", "D");

@@ -1,7 +1,7 @@
 package storage.discovery;
 
 import storage.cluster.PeerRegistry;
-import storage.cluster.ReplicationManager;
+import storage.cluster.PeerEndpoint;
 import storage.config.PeerConfiguration;
 import storage.link.HeartbeatManager;
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -60,21 +60,21 @@ class DiscoveryManagerTest {
         PeerConfiguration local = config("A", "192.168.72.10", 6400, "shared-discovery-secret");
         PeerRegistry registry = new PeerRegistry("A", local.peerEndpoints());
         java.util.stream.IntStream.range(0, 32).parallel().forEach(ignored ->
-                registry.join(new ReplicationManager.PeerEndpoint("D", "192.168.72.13", 6403)));
+                registry.join(new PeerEndpoint("D", "192.168.72.13", 6403)));
         assertEquals(3, registry.members().size());
         assertEquals(1, registry.members().stream().filter(member -> member.endpoint().name().equals("D")).count());
     }
 
     @Test
     void heartbeatRefreshesDiscoveredEndpoints() {
-        List<ReplicationManager.PeerEndpoint> initial = List.of(
-                new ReplicationManager.PeerEndpoint("A", "192.168.73.10", 6500),
-                new ReplicationManager.PeerEndpoint("B", "192.168.73.11", 6501));
+        List<PeerEndpoint> initial = List.of(
+                new PeerEndpoint("A", "192.168.73.10", 6500),
+                new PeerEndpoint("B", "192.168.73.11", 6501));
         try (HeartbeatManager heartbeat = new HeartbeatManager("A", initial)) {
             heartbeat.refreshPeers(List.of(
-                    new ReplicationManager.PeerEndpoint("A", "192.168.73.10", 6500),
-                    new ReplicationManager.PeerEndpoint("B", "192.168.73.33", 6501),
-                    new ReplicationManager.PeerEndpoint("C", "192.168.73.13", 6503)));
+                    new PeerEndpoint("A", "192.168.73.10", 6500),
+                    new PeerEndpoint("B", "192.168.73.33", 6501),
+                    new PeerEndpoint("C", "192.168.73.13", 6503)));
             assertEquals("192.168.73.33", heartbeat.statuses().stream()
                     .filter(status -> status.peer().name().equals("B")).findFirst().orElseThrow().peer().host());
             assertTrue(heartbeat.statuses().stream().anyMatch(status -> status.peer().name().equals("C")));
@@ -82,34 +82,30 @@ class DiscoveryManagerTest {
     }
 
     @Test
-    void replicationUsesDynamicRegistryForTwoThreeAndFivePeers() {
-        List<ReplicationManager.PeerEndpoint> initial = List.of(
-                new ReplicationManager.PeerEndpoint("A", "192.168.74.10", 6600),
-                new ReplicationManager.PeerEndpoint("B", "192.168.74.11", 6601));
+    void membershipGrowsFromTwoToThreeAndFivePeers() {
+        List<PeerEndpoint> initial = List.of(
+                new PeerEndpoint("A", "192.168.74.10", 6600),
+                new PeerEndpoint("B", "192.168.74.11", 6601));
         PeerRegistry registry = new PeerRegistry("A", initial);
-        ReplicationManager replication = new ReplicationManager("A", registry::endpoints);
-        assertEquals(2, replication.peers().size());
-        registry.join(new ReplicationManager.PeerEndpoint("C", "192.168.74.12", 6602));
-        assertEquals(3, replication.peers().size());
-        registry.join(new ReplicationManager.PeerEndpoint("D", "192.168.74.13", 6603));
-        registry.join(new ReplicationManager.PeerEndpoint("E", "192.168.74.14", 6604));
-        assertEquals(5, replication.peers().size());
-        assertEquals("B", replication.replicaTarget().orElseThrow().name());
+        assertEquals(2, registry.endpoints().size());
+        registry.join(new PeerEndpoint("C", "192.168.74.12", 6602));
+        assertEquals(3, registry.endpoints().size());
+        registry.join(new PeerEndpoint("D", "192.168.74.13", 6603));
+        registry.join(new PeerEndpoint("E", "192.168.74.14", 6604));
+        assertEquals(5, registry.endpoints().size());
     }
 
     @Test
-    void twoSinglePeerConfigsDiscoverEachOtherAndEnableReplication() throws Exception {
+    void twoSinglePeerConfigsDiscoverEachOther() throws Exception {
         PeerConfiguration a = singlePeerConfig("A", "192.168.75.10", 6800);
         PeerConfiguration b = singlePeerConfig("B", "192.168.75.11", 6801);
         PeerRegistry registryA = new PeerRegistry("A", a.peerEndpoints());
-        ReplicationManager replicationA = new ReplicationManager("A", registryA::endpoints);
         try (DiscoveryManager discoveryA = new DiscoveryManager(a, registryA,
                 endpoint -> { })) {
             byte[] join = DiscoveryManager.encode(DiscoveryManager.createJoin(
                     b, System.currentTimeMillis(), UUID.randomUUID().toString()));
             assertTrue(discoveryA.acceptDatagram(join, InetAddress.getByName("192.168.75.11")));
             assertEquals(2, registryA.members().size());
-            assertEquals("B", replicationA.replicaTarget().orElseThrow().name());
             assertTrue(registryA.members().stream().anyMatch(member ->
                     member.endpoint().name().equals("B") && !member.configured()));
         }

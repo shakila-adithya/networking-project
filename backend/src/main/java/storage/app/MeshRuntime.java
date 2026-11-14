@@ -1,7 +1,8 @@
 package storage.app;
 
-import storage.cluster.ReplicationManager;
-import storage.bluetooth.BlueZAdapter;
+import storage.cluster.PeerEndpoint;
+import storage.bluetooth.LocalBluetooth;
+import storage.bluetooth.BluetoothPlatform;
 import storage.bluetooth.BluetoothAddress;
 import storage.bluetooth.BluetoothScanner;
 import storage.bluetooth.BluetoothTransport;
@@ -11,7 +12,6 @@ import storage.config.PeerConfiguration;
 import storage.device.DeviceProfile;
 import storage.device.DeviceProfileService;
 import storage.discovery.Candidate;
-import storage.files.FileMetadata;
 import storage.files.FileStore;
 import storage.link.TopologyController;
 import storage.link.TopologyPolicy;
@@ -56,7 +56,9 @@ public final class MeshRuntime implements AutoCloseable, DeviceApi {
     public static final int DEFAULT_PORT_OFFSET = 2_000;
 
     private final Transport transport;
-    private final BlueZAdapter bluetoothAdapter;
+    private final LocalBluetooth bluetoothAdapter;
+    private final boolean ownsBluetoothAdapter;
+    private final String meshId;
     private BluetoothScanner bluetoothScanner;
     private final AtomicBoolean closed = new AtomicBoolean();
     private final MeshNode node;
@@ -69,25 +71,31 @@ public final class MeshRuntime implements AutoCloseable, DeviceApi {
     private volatile String advertiseError = "";
 
     public MeshRuntime(PeerConfiguration configuration, FileStore store, DeviceProfileService profile) throws IOException {
+        this(configuration, store, profile, null);
+    }
+    public MeshRuntime(PeerConfiguration configuration, FileStore store, DeviceProfileService profile,
+                       LocalBluetooth sharedBluetooth) throws IOException {
         this.profile = profile;
+        var security = new storage.security.MeshSecurity(configuration.clusterId(), configuration.discoverySecret());
+        meshId = configuration.clusterId();
+        ownsBluetoothAdapter = sharedBluetooth == null;
         String mode = System.getProperty("mesh.transport", "both").trim().toLowerCase();
         if (!List.of("tcp", "bluetooth", "both").contains(mode)) {
             throw new IOException("mesh.transport must be tcp, bluetooth or both (was \"" + mode + "\")");
         }
         List<Transport> carriers = new ArrayList<>();
-        BlueZAdapter adapter = null;
+        LocalBluetooth adapter = null;
         if (!mode.equals("bluetooth")) {
             int port = Integer.getInteger("mesh.port", configuration.port() + DEFAULT_PORT_OFFSET);
             carriers.add(new TcpTransport(configuration.bindAddress(), port));
         }
         if (!mode.equals("tcp")) {
             try {
-                if (!NativeRfcomm.isSupported()) {
-                    throw new IOException("RFCOMM Bluetooth sockets are not available on this machine "
-                            + "(Linux with the 'rfcomm' kernel module is required)");
+                if (!BluetoothPlatform.isSupported()) {
+                    throw new IOException(BluetoothPlatform.unsupportedReason());
                 }
-                adapter = BlueZAdapter.open(Path.of("config", "bluetooth-restore.properties"));
-                NativeRfcomm rfcomm = new NativeRfcomm();
+                adapter = sharedBluetooth == null ? BluetoothPlatform.open(Path.of("config", "bluetooth-restore.properties")) : sharedBluetooth;
+                storage.bluetooth.RfcommApi rfcomm = BluetoothPlatform.rfcomm();
                 int channel = Integer.getInteger("mesh.bluetooth.channel", BluetoothTransport.DEFAULT_CHANNEL);
                 try {
                     rfcomm.listen(channel).close(); // is the channel free? (another Relay on this computer may hold it)
@@ -98,7 +106,7 @@ public final class MeshRuntime implements AutoCloseable, DeviceApi {
                 carriers.add(new BluetoothTransport(rfcomm, adapter.address(), channel));
             } catch (IOException e) {
                 if (adapter != null) {
-                    adapter.close();
+                    if (ownsBluetoothAdapter) adapter.close();
                     adapter = null;
                 }
                 if (mode.equals("bluetooth")) {
@@ -109,7 +117,9 @@ public final class MeshRuntime implements AutoCloseable, DeviceApi {
             }
         }
         bluetoothAdapter = adapter;
-        transport = carriers.size() == 1 ? carriers.get(0) : new CompositeTransport(carriers);
+        transport = new storage.security.SecureTransport(
+                carriers.size() == 1 ? carriers.get(0) : new CompositeTransport(carriers),
+                security);
         // Hop count until measured link quality (RTT/loss/signal strength) is available per link.
         router = new AodvRouter(LinkCost.HOP_COUNT, Duration.ofSeconds(2), 3, Duration.ofSeconds(60));
         node = new MeshNode(configuration.localPeerId(), transport, router);
@@ -141,7 +151,7 @@ public final class MeshRuntime implements AutoCloseable, DeviceApi {
         }
         bluetoothScanner = new BluetoothScanner(bluetoothAdapter, topology, localDeviceId,
                 Duration.ofSeconds(Integer.getInteger("mesh.bluetooth.scanSeconds", 8)),
-                Duration.ofSeconds(Integer.getInteger("mesh.bluetooth.intervalSeconds", 30)));
+                Duration.ofSeconds(Integer.getInteger("mesh.bluetooth.intervalSeconds", 30)), meshId);
         bluetoothScanner.start();
     }
 
@@ -153,7 +163,7 @@ public final class MeshRuntime implements AutoCloseable, DeviceApi {
         }
         try {
             if (settings.visible()) {
-                bluetoothAdapter.advertise(node.localId(), settings.displayName());
+                bluetoothAdapter.advertise(node.localId(), settings.displayName(), meshId);
             } else {
                 bluetoothAdapter.stopAdvertising();
             }
@@ -191,23 +201,16 @@ public final class MeshRuntime implements AutoCloseable, DeviceApi {
         return status;
     }
 
+    public List<Nearby> bluetoothNearby() {
+        return bluetoothScanner == null ? List.of() : bluetoothScanner.lastScan();
+    }
+
     public MeshNode node() {
         return node;
     }
 
     public MeshFileService files() {
         return files;
-    }
-
-    /** Starts a routed file transfer; used as the fallback when a direct connection to a peer fails. */
-    public boolean sendFile(String peerName, FileMetadata metadata, Path content) {
-        try {
-            files.send(peerName, metadata, content);
-            return true;
-        } catch (IOException | RuntimeException e) {
-            System.err.println("Could not start mesh transfer to " + peerName + ": " + e.getMessage());
-            return false;
-        }
     }
 
     public ChatService chat() {
@@ -223,7 +226,7 @@ public final class MeshRuntime implements AutoCloseable, DeviceApi {
      * Tells the topology controller about a device seen nearby. Its mesh port is assumed to follow the
      * same offset rule as ours. {@code permanent} is for configured peers, which are always candidates.
      */
-    public void offerPeer(ReplicationManager.PeerEndpoint endpoint, boolean permanent) {
+    public void offerPeer(PeerEndpoint endpoint, boolean permanent) {
         if (endpoint.name().equals(node.localId())) {
             return;
         }
@@ -282,6 +285,7 @@ public final class MeshRuntime implements AutoCloseable, DeviceApi {
     @Override
     public Map<String, Object> nearby() {
         Set<String> neighbours = node.neighbourIds();
+        Map<String, String> neighbourKinds = node.neighbourKinds();
         Map<String, String> names = node.names();
         Map<String, RoutingTable.Route> routes = new java.util.HashMap<>();
         for (RoutingTable.Route route : router.routes()) {
@@ -291,15 +295,16 @@ public final class MeshRuntime implements AutoCloseable, DeviceApi {
         }
         Map<String, TopologyController.CandidateStatus> candidates = new java.util.HashMap<>();
         for (TopologyController.CandidateStatus status : topology.status()) {
-            candidates.put(status.candidate().deviceId(), status);
+            candidates.put(status.candidate().deviceId() + "\0" + status.candidate().address(), status);
         }
         List<Map<String, Object>> items = new ArrayList<>();
         BluetoothScanner scanner = bluetoothScanner;
         if (scanner != null) {
             for (Nearby device : scanner.lastScan()) {
                 String id = device.relayDeviceId().orElse(null);
-                boolean connected = id != null && neighbours.contains(id);
-                TopologyController.CandidateStatus candidate = id == null ? null : candidates.get(id);
+                boolean connected = id != null && BluetoothAddress.withPrefix(device.address()).equals(node.neighbourAddresses().get(id));
+                TopologyController.CandidateStatus candidate = id == null ? null
+                        : candidates.get(id + "\0" + BluetoothAddress.withPrefix(device.address()));
                 String state = connected ? "CONNECTED" : id == null ? "OTHER"
                         : candidate != null && candidate.failures() > 0 ? "FAILED" : "AVAILABLE";
                 String name = device.friendlyName().orElse(id != null && names.containsKey(id) ? names.get(id)
@@ -315,11 +320,21 @@ public final class MeshRuntime implements AutoCloseable, DeviceApi {
                 continue; // Bluetooth devices are listed from the scan above
             }
             String id = status.candidate().deviceId();
-            boolean connected = neighbours.contains(id);
-            items.add(nearbyItem("lan", id, names.getOrDefault(id, id), address, null, null, true,
+            boolean connected = status.connected();
+            items.add(nearbyItem(connected ? neighbourKinds.getOrDefault(id, "tcp") : "lan", id, names.getOrDefault(id, id), address, null, null, true,
                     connected ? "CONNECTED" : status.failures() > 0 ? "FAILED" : "AVAILABLE",
                     status.lastError(), hops(id, connected, routes)));
         }
+        // Accepted TCP links have an ephemeral remote source port, not the listening candidate port.
+        // Report that actual active link separately instead of marking every candidate for the ID active.
+        for (var active : node.neighbourAddresses().entrySet()) {
+            if (items.stream().noneMatch(item -> active.getValue().equals(item.get("address")) && "CONNECTED".equals(item.get("state")))) {
+                items.add(nearbyItem(neighbourKinds.getOrDefault(active.getKey(), "tcp"), active.getKey(),
+                        names.getOrDefault(active.getKey(), active.getKey()), active.getValue(), null, null,
+                        true, "CONNECTED", "", 1));
+            }
+        }
+        for (var item : items) item.put("peerConnected", neighbours.contains(item.get("deviceId")));
         Map<String, Object> result = new LinkedHashMap<>();
         result.put("bluetoothAvailable", bluetoothAdapter != null);
         result.put("scanning", scanner != null && scanner.isScanning());
@@ -368,6 +383,11 @@ public final class MeshRuntime implements AutoCloseable, DeviceApi {
         topology.connectNow(deviceId);
     }
 
+    @Override
+    public void connectDevice(String deviceId, String address) throws IOException {
+        topology.connectNow(deviceId, address);
+    }
+
     public String address() {
         return transport.localAddress();
     }
@@ -385,7 +405,11 @@ public final class MeshRuntime implements AutoCloseable, DeviceApi {
         chat.close();
         node.close();
         if (bluetoothAdapter != null) {
-            bluetoothAdapter.close(); // puts the adapter's name and discoverable setting back
+            if (ownsBluetoothAdapter) bluetoothAdapter.close();
+            else {
+                try { bluetoothAdapter.stopAdvertising(); }
+                catch (IOException e) { System.err.println("Cannot stop mesh Bluetooth advertisement: " + e.getMessage()); }
+            }
         }
     }
 }

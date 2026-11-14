@@ -20,7 +20,8 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
 import org.junit.jupiter.api.io.TempDir;
-import storage.cluster.ReplicationManager;
+import storage.cluster.PeerEndpoint;
+import storage.cluster.PeerRegistry;
 import storage.files.FileStore;
 import storage.link.HeartbeatManager;
 import storage.messaging.ChatService;
@@ -68,11 +69,11 @@ class MeshSharingRestTest {
         }
     }
 
-    private RestApiServer api(Device a, List<ReplicationManager.PeerEndpoint> peers) throws Exception {
-        ReplicationManager replication = new ReplicationManager("A", peers);
+    private RestApiServer api(Device a, List<PeerEndpoint> peers) throws Exception {
+        PeerRegistry registry = new PeerRegistry("A", peers);
         HeartbeatManager heartbeat = new HeartbeatManager("A", peers);
         RestApiServer api = new RestApiServer("127.0.0.1", 0, "A", "127.0.0.1", peers.get(0).port(),
-                a.store(), heartbeat, replication);
+                a.store(), heartbeat, registry);
         closeables.add(heartbeat);
         closeables.add(api);
         api.attachMesh(a.node(), a.chat(), "memory", a.router()::routes, a.files());
@@ -120,7 +121,7 @@ class MeshSharingRestTest {
         Device a = device("A"), b = device("B"), c = device("C");
         connect(a, "A", b, "B");
         connect(b, "B", c, "C");
-        RestApiServer api = api(a, List.of(new ReplicationManager.PeerEndpoint("A", "127.0.0.1", closedPort())));
+        RestApiServer api = api(a, List.of(new PeerEndpoint("A", "127.0.0.1", closedPort())));
         byte[] content = new byte[200_000];
         new java.util.Random(7).nextBytes(content);
 
@@ -142,6 +143,8 @@ class MeshSharingRestTest {
         UUID fileId = UUID.fromString(body.path("fileId").asText());
         assertArrayEquals(content, Files.readAllBytes(c.store().open(fileId).contentPath()));
         assertEquals(List.of("C"), c.store().open(fileId).metadata().recipients());
+        assertTrue(a.store().inventory().isEmpty(), "sender keeps no permanent received-file copy");
+        assertTrue(b.store().inventory().isEmpty(), "relay forwards chunks without keeping a permanent copy");
         assertEquals(1, get(api, "/api/mesh/transfers").path("transfers").size());
         assertEquals(409, client.send(HttpRequest.newBuilder(URI.create("http://127.0.0.1:" + api.port()
                 + "/api/mesh/transfers/" + transferId + "/resume")).POST(HttpRequest.BodyPublishers.noBody()).build(),
@@ -153,8 +156,8 @@ class MeshSharingRestTest {
         Device a = device("A"), b = device("B");
         connect(a, "A", b, "B");
         // B is a registered storage peer, but its TCP port is closed: the direct upload fails.
-        RestApiServer api = api(a, List.of(new ReplicationManager.PeerEndpoint("A", "127.0.0.1", closedPort()),
-                new ReplicationManager.PeerEndpoint("B", "127.0.0.1", closedPort())));
+        RestApiServer api = api(a, List.of(new PeerEndpoint("A", "127.0.0.1", closedPort()),
+                new PeerEndpoint("B", "127.0.0.1", closedPort())));
         byte[] content = "routed because direct failed".getBytes();
         HttpResponse<String> response = post(api, "B", content);
         assertEquals(202, response.statusCode(), response.body());
@@ -169,7 +172,7 @@ class MeshSharingRestTest {
     void deviceTheMeshDoesNotKnowIsStillRejected() throws Exception {
         Device a = device("A"), b = device("B");
         connect(a, "A", b, "B");
-        RestApiServer api = api(a, List.of(new ReplicationManager.PeerEndpoint("A", "127.0.0.1", closedPort())));
+        RestApiServer api = api(a, List.of(new PeerEndpoint("A", "127.0.0.1", closedPort())));
         assertEquals(400, post(api, "NOBODY", new byte[] {1}).statusCode());
         assertEquals(404, client.send(HttpRequest.newBuilder(URI.create("http://127.0.0.1:" + api.port()
                 + "/api/mesh/transfers/" + UUID.randomUUID())).build(), HttpResponse.BodyHandlers.ofString()).statusCode());

@@ -1,6 +1,6 @@
 package storage.config;
 
-import storage.cluster.ReplicationManager;
+import storage.cluster.PeerEndpoint;
 import com.fasterxml.jackson.databind.DeserializationFeature;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import java.io.IOException;
@@ -57,10 +57,6 @@ public record PeerConfiguration(String localPeerId, String bindAddress,
             }
         }
         peers = List.copyOf(Objects.requireNonNull(peers, "peers"));
-        if (!discoveryEnabled && peers.size() < ReplicationManager.REPLICATION_FACTOR) {
-            throw new IllegalArgumentException("at least " + ReplicationManager.REPLICATION_FACTOR
-                    + " peers are required for replication factor " + ReplicationManager.REPLICATION_FACTOR);
-        }
         Set<String> ids = new HashSet<>();
         Set<String> endpoints = new HashSet<>();
         PeerDefinition local = null;
@@ -85,6 +81,10 @@ public record PeerConfiguration(String localPeerId, String bindAddress,
                 DEFAULT_CLUSTER_ID, false, DEFAULT_DISCOVERY_GROUP, DEFAULT_DISCOVERY_PORT, null);
     }
 
+    @Override public String toString() {
+        return "PeerConfiguration[localPeerId=" + localPeerId + ", clusterId=" + clusterId + ", credentials redacted]";
+    }
+
     public static PeerConfiguration load(Path path) throws IOException {
         Objects.requireNonNull(path, "path");
         if (!Files.isRegularFile(path)) throw new IOException("configuration file does not exist: " + path);
@@ -96,11 +96,15 @@ public record PeerConfiguration(String localPeerId, String bindAddress,
         }
     }
 
+    public static List<PeerEndpoint> localhostEndpoints() {
+        return List.of(new PeerEndpoint("A", "127.0.0.1", 5000),
+                new PeerEndpoint("B", "127.0.0.1", 5001),
+                new PeerEndpoint("C", "127.0.0.1", 5002));
+    }
+
     public static PeerConfiguration localhost(String localPeerId, String bindAddress, int port) {
-        List<PeerDefinition> peers = List.of(
-                new PeerDefinition("A", "127.0.0.1", 5000),
-                new PeerDefinition("B", "127.0.0.1", 5001),
-                new PeerDefinition("C", "127.0.0.1", 5002));
+        List<PeerDefinition> peers = localhostEndpoints().stream()
+                .map(peer -> new PeerDefinition(peer.name(), peer.host(), peer.port())).toList();
         PeerDefinition local = peers.stream().filter(peer -> peer.id().equals(localPeerId)).findFirst()
                 .orElse(new PeerDefinition(localPeerId, "127.0.0.1", port));
         if (!local.id().equals(localPeerId) || (local.port() != port && peers.stream().anyMatch(p -> p.id().equals(localPeerId)))) {
@@ -108,11 +112,11 @@ public record PeerConfiguration(String localPeerId, String bindAddress,
         }
         return new PeerConfiguration(localPeerId, bindAddress, local.address(), local.port(),
                 Path.of("storage-data", localPeerId).toString(), peers,
-                DEFAULT_CLUSTER_ID, false, DEFAULT_DISCOVERY_GROUP, DEFAULT_DISCOVERY_PORT, null);
+                DEFAULT_CLUSTER_ID, false, DEFAULT_DISCOVERY_GROUP, DEFAULT_DISCOVERY_PORT, System.getenv("RELAY_MESH_PASSWORD"));
     }
 
-    public List<ReplicationManager.PeerEndpoint> peerEndpoints() {
-        return peers.stream().map(peer -> new ReplicationManager.PeerEndpoint(
+    public List<PeerEndpoint> peerEndpoints() {
+        return peers.stream().map(peer -> new PeerEndpoint(
                 peer.id(), peer.address(), peer.port())).toList();
     }
 

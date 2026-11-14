@@ -135,6 +135,8 @@ public final class InMemoryTransport implements Transport {
             return local.equals(name) || remote.equals(name);
         }
 
+        @Override public String kind() { return "memory"; }
+
         @Override
         public String remoteAddress() {
             return remote;

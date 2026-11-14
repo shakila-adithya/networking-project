@@ -46,42 +46,46 @@ public final class NativeRfcomm implements RfcommApi {
     private static final long ACCEPT_SLICE_MILLIS = 100;
     private static final int SOCKADDR_RC_SIZE = 10; // family(2) + bdaddr(6) + channel(1) + padding(1)
 
-    private static final Linker LINKER = Linker.nativeLinker();
-    private static final StructLayout CAPTURE = Linker.Option.captureStateLayout();
-    private static final VarHandle ERRNO = CAPTURE.varHandle(MemoryLayout.PathElement.groupElement("errno"));
-    private static final MethodHandle SOCKET;
-    private static final MethodHandle BIND;
-    private static final MethodHandle LISTEN;
-    private static final MethodHandle ACCEPT;
-    private static final MethodHandle CONNECT;
-    private static final MethodHandle CLOSE;
-    private static final MethodHandle SHUTDOWN;
-    private static final MethodHandle RECV;
-    private static final MethodHandle SEND;
-    private static final MethodHandle POLL;
-    private static final MethodHandle SETSOCKOPT;
+    // Load libc symbols only after the platform check; Windows can still run authenticated LAN mode.
+    private static final class Linux {
+        private static final Linker LINKER = Linker.nativeLinker();
+        private static final StructLayout CAPTURE = Linker.Option.captureStateLayout();
+        private static final VarHandle ERRNO = CAPTURE.varHandle(MemoryLayout.PathElement.groupElement("errno"));
+        private static final MethodHandle SOCKET;
+        private static final MethodHandle BIND;
+        private static final MethodHandle LISTEN;
+        private static final MethodHandle ACCEPT;
+        private static final MethodHandle CONNECT;
+        private static final MethodHandle CLOSE;
+        private static final MethodHandle SHUTDOWN;
+        private static final MethodHandle RECV;
+        private static final MethodHandle SEND;
+        private static final MethodHandle POLL;
+        private static final MethodHandle SETSOCKOPT;
 
-    static {
-        SymbolLookup libc = LINKER.defaultLookup();
-        Linker.Option errno = Linker.Option.captureCallState("errno");
-        SOCKET = handle(libc, "socket", FunctionDescriptor.of(JAVA_INT, JAVA_INT, JAVA_INT, JAVA_INT), errno);
-        BIND = handle(libc, "bind", FunctionDescriptor.of(JAVA_INT, JAVA_INT, ADDRESS, JAVA_INT), errno);
-        LISTEN = handle(libc, "listen", FunctionDescriptor.of(JAVA_INT, JAVA_INT, JAVA_INT), errno);
-        ACCEPT = handle(libc, "accept", FunctionDescriptor.of(JAVA_INT, JAVA_INT, ADDRESS, ADDRESS), errno);
-        CONNECT = handle(libc, "connect", FunctionDescriptor.of(JAVA_INT, JAVA_INT, ADDRESS, JAVA_INT), errno);
-        CLOSE = handle(libc, "close", FunctionDescriptor.of(JAVA_INT, JAVA_INT));
-        SHUTDOWN = handle(libc, "shutdown", FunctionDescriptor.of(JAVA_INT, JAVA_INT, JAVA_INT));
-        RECV = handle(libc, "recv", FunctionDescriptor.of(JAVA_LONG, JAVA_INT, ADDRESS, JAVA_LONG, JAVA_INT), errno);
-        SEND = handle(libc, "send", FunctionDescriptor.of(JAVA_LONG, JAVA_INT, ADDRESS, JAVA_LONG, JAVA_INT), errno);
-        POLL = handle(libc, "poll", FunctionDescriptor.of(JAVA_INT, ADDRESS, JAVA_LONG, JAVA_INT), errno);
-        SETSOCKOPT = handle(libc, "setsockopt",
-                FunctionDescriptor.of(JAVA_INT, JAVA_INT, JAVA_INT, JAVA_INT, ADDRESS, JAVA_INT));
-    }
+        static {
+            SymbolLookup libc = LINKER.defaultLookup();
+            Linker.Option errno = Linker.Option.captureCallState("errno");
+            SOCKET = handle(libc, "socket", FunctionDescriptor.of(JAVA_INT, JAVA_INT, JAVA_INT, JAVA_INT), errno);
+            BIND = handle(libc, "bind", FunctionDescriptor.of(JAVA_INT, JAVA_INT, ADDRESS, JAVA_INT), errno);
+            LISTEN = handle(libc, "listen", FunctionDescriptor.of(JAVA_INT, JAVA_INT, JAVA_INT), errno);
+            ACCEPT = handle(libc, "accept", FunctionDescriptor.of(JAVA_INT, JAVA_INT, ADDRESS, ADDRESS), errno);
+            CONNECT = handle(libc, "connect", FunctionDescriptor.of(JAVA_INT, JAVA_INT, ADDRESS, JAVA_INT), errno);
+            CLOSE = handle(libc, "close", FunctionDescriptor.of(JAVA_INT, JAVA_INT));
+            SHUTDOWN = handle(libc, "shutdown", FunctionDescriptor.of(JAVA_INT, JAVA_INT, JAVA_INT));
+            RECV = handle(libc, "recv", FunctionDescriptor.of(JAVA_LONG, JAVA_INT, ADDRESS, JAVA_LONG, JAVA_INT), errno);
+            SEND = handle(libc, "send", FunctionDescriptor.of(JAVA_LONG, JAVA_INT, ADDRESS, JAVA_LONG, JAVA_INT), errno);
+            POLL = handle(libc, "poll", FunctionDescriptor.of(JAVA_INT, ADDRESS, JAVA_LONG, JAVA_INT), errno);
+            SETSOCKOPT = handle(libc, "setsockopt",
+                    FunctionDescriptor.of(JAVA_INT, JAVA_INT, JAVA_INT, JAVA_INT, ADDRESS, JAVA_INT));
+        }
 
-    private static MethodHandle handle(SymbolLookup libc, String name, FunctionDescriptor descriptor,
-                                       Linker.Option... options) {
-        return LINKER.downcallHandle(libc.find(name).orElseThrow(
-                () -> new UnsatisfiedLinkError("libc has no " + name)), descriptor, options);
+        private static MethodHandle handle(SymbolLookup libc, String name, FunctionDescriptor descriptor,
+                                           Linker.Option... options) {
+            return LINKER.downcallHandle(libc.find(name).orElseThrow(
+                    () -> new UnsatisfiedLinkError("libc has no " + name)), descriptor, options);
+        }
+
     }
 
     /** True on Linux when the kernel offers RFCOMM sockets (the {@code rfcomm} module is loaded or built in). */
@@ -90,31 +94,37 @@ public final class NativeRfcomm implements RfcommApi {
             return false;
         }
         try (Arena arena = Arena.ofConfined()) {
-            MemorySegment state = arena.allocate(CAPTURE);
-            int fd = (int) SOCKET.invokeExact(state, AF_BLUETOOTH, SOCK_STREAM, BTPROTO_RFCOMM);
+            MemorySegment state = arena.allocate(Linux.CAPTURE);
+            int fd = (int) Linux.SOCKET.invokeExact(state, AF_BLUETOOTH, SOCK_STREAM, BTPROTO_RFCOMM);
             if (fd < 0) {
                 return false;
             }
-            int ignored = (int) CLOSE.invokeExact(fd);
+            int ignored = (int) Linux.CLOSE.invokeExact(fd);
             return true;
         } catch (Throwable t) {
             return false;
         }
     }
 
+    private static void requireLinux() throws IOException {
+        if (!System.getProperty("os.name", "").toLowerCase(Locale.ROOT).contains("linux"))
+            throw new IOException("Bluetooth RFCOMM in this build requires Linux/BlueZ; Windows native Bluetooth is not implemented.");
+    }
+
     // ================= RfcommApi =================
 
     @Override
     public RfcommServer listen(int channel) throws IOException {
+        requireLinux();
         checkChannel(channel);
         Fd fd = newSocket();
         try (Arena arena = Arena.ofConfined()) {
-            MemorySegment state = arena.allocate(CAPTURE);
+            MemorySegment state = arena.allocate(Linux.CAPTURE);
             MemorySegment address = socketAddress(arena, null, channel); // any local adapter
-            if (call(() -> (int) BIND.invokeExact(state, fd.number, address, SOCKADDR_RC_SIZE)) < 0) {
+            if (call(() -> (int) Linux.BIND.invokeExact(state, fd.number, address, SOCKADDR_RC_SIZE)) < 0) {
                 throw failure("bind RFCOMM channel " + channel, state);
             }
-            if (call(() -> (int) LISTEN.invokeExact(state, fd.number, 5)) < 0) {
+            if (call(() -> (int) Linux.LISTEN.invokeExact(state, fd.number, 5)) < 0) {
                 throw failure("listen on RFCOMM channel " + channel, state);
             }
         } catch (IOException | RuntimeException e) {
@@ -126,19 +136,20 @@ public final class NativeRfcomm implements RfcommApi {
 
     @Override
     public RfcommConnection connect(String bluetoothAddress, int channel, Duration timeout) throws IOException {
+        requireLinux();
         checkChannel(channel);
         String address = BluetoothAddress.normalize(bluetoothAddress);
         Fd fd = newSocket();
         try (Arena arena = Arena.ofConfined()) {
-            MemorySegment state = arena.allocate(CAPTURE);
+            MemorySegment state = arena.allocate(Linux.CAPTURE);
             // The kernel waits at most this long for the radio connection (page + RFCOMM setup).
             MemorySegment timeval = arena.allocate(16);
             long millis = Math.max(1_000, timeout.toMillis());
             timeval.set(JAVA_LONG, 0, millis / 1000);
             timeval.set(JAVA_LONG, 8, (millis % 1000) * 1000);
-            int ignored = call(() -> (int) SETSOCKOPT.invokeExact(fd.number, SOL_SOCKET, SO_SNDTIMEO, timeval, 16));
+            int ignored = call(() -> (int) Linux.SETSOCKOPT.invokeExact(fd.number, SOL_SOCKET, SO_SNDTIMEO, timeval, 16));
             MemorySegment remote = socketAddress(arena, address, channel);
-            if (call(() -> (int) CONNECT.invokeExact(state, fd.number, remote, SOCKADDR_RC_SIZE)) < 0) {
+            if (call(() -> (int) Linux.CONNECT.invokeExact(state, fd.number, remote, SOCKADDR_RC_SIZE)) < 0) {
                 throw connectFailure(address, channel, errno(state));
             }
         } catch (IOException | RuntimeException e) {
@@ -158,8 +169,8 @@ public final class NativeRfcomm implements RfcommApi {
 
     private static Fd newSocket() throws IOException {
         try (Arena arena = Arena.ofConfined()) {
-            MemorySegment state = arena.allocate(CAPTURE);
-            int number = call(() -> (int) SOCKET.invokeExact(state, AF_BLUETOOTH, SOCK_STREAM, BTPROTO_RFCOMM));
+            MemorySegment state = arena.allocate(Linux.CAPTURE);
+            int number = call(() -> (int) Linux.SOCKET.invokeExact(state, AF_BLUETOOTH, SOCK_STREAM, BTPROTO_RFCOMM));
             if (number < 0) {
                 throw failure("open an RFCOMM socket (is the 'rfcomm' kernel module loaded?)", state);
             }
@@ -206,7 +217,7 @@ public final class NativeRfcomm implements RfcommApi {
     }
 
     private static int errno(MemorySegment state) {
-        return (int) ERRNO.get(state, 0L);
+        return (int) Linux.ERRNO.get(state, 0L);
     }
 
     private static IOException failure(String what, MemorySegment state) {
@@ -266,7 +277,7 @@ public final class NativeRfcomm implements RfcommApi {
                 return;
             }
             try {
-                int ignored = (int) SHUTDOWN.invokeExact(number, SHUT_RDWR); // wakes blocked read/accept
+                int ignored = (int) Linux.SHUTDOWN.invokeExact(number, SHUT_RDWR); // wakes blocked read/accept
             } catch (Throwable t) {
                 System.err.println("Bluetooth shutdown failed: " + t);
             }
@@ -286,7 +297,7 @@ public final class NativeRfcomm implements RfcommApi {
                 return;
             }
             try {
-                int ignored = (int) CLOSE.invokeExact(number);
+                int ignored = (int) Linux.CLOSE.invokeExact(number);
             } catch (Throwable t) {
                 System.err.println("Bluetooth close failed: " + t);
             }
@@ -321,11 +332,11 @@ public final class NativeRfcomm implements RfcommApi {
                 throw new IOException("server is closed");
             }
             try (Arena arena = Arena.ofConfined()) {
-                MemorySegment state = arena.allocate(CAPTURE);
+                MemorySegment state = arena.allocate(Linux.CAPTURE);
                 MemorySegment poll = arena.allocate(8); // struct pollfd { int fd; short events; short revents; }
                 poll.set(JAVA_INT, 0, fd.number);
                 poll.set(JAVA_SHORT, 4, POLLIN);
-                int ready = call(() -> (int) POLL.invokeExact(state, poll, 1L, millis));
+                int ready = call(() -> (int) Linux.POLL.invokeExact(state, poll, 1L, millis));
                 if (ready < 0) {
                     if (errno(state) == EINTR) {
                         return null;
@@ -342,7 +353,7 @@ public final class NativeRfcomm implements RfcommApi {
                 MemorySegment remote = arena.allocate(SOCKADDR_RC_SIZE);
                 MemorySegment length = arena.allocate(JAVA_INT);
                 length.set(JAVA_INT, 0, SOCKADDR_RC_SIZE);
-                int client = call(() -> (int) ACCEPT.invokeExact(state, fd.number, remote, length));
+                int client = call(() -> (int) Linux.ACCEPT.invokeExact(state, fd.number, remote, length));
                 if (client < 0) {
                     if (fd.closing.get()) {
                         throw new IOException("server is closed");
@@ -415,10 +426,10 @@ public final class NativeRfcomm implements RfcommApi {
                     return -1;
                 }
                 try (Arena arena = Arena.ofConfined()) {
-                    MemorySegment state = arena.allocate(CAPTURE);
+                    MemorySegment state = arena.allocate(Linux.CAPTURE);
                     MemorySegment buffer = arena.allocate(wanted);
                     while (true) {
-                        long count = callLong(() -> (long) RECV.invokeExact(state, fd.number, buffer, (long) wanted, 0));
+                        long count = callLong(() -> (long) Linux.RECV.invokeExact(state, fd.number, buffer, (long) wanted, 0));
                         if (count > 0) {
                             MemorySegment.copy(buffer, JAVA_BYTE, 0, bytes, offset, (int) count);
                             return (int) count;
@@ -457,10 +468,10 @@ public final class NativeRfcomm implements RfcommApi {
                         throw new IOException("Bluetooth link is closed");
                     }
                     try (Arena arena = Arena.ofConfined()) {
-                        MemorySegment state = arena.allocate(CAPTURE);
+                        MemorySegment state = arena.allocate(Linux.CAPTURE);
                         MemorySegment buffer = arena.allocate(part);
                         MemorySegment.copy(bytes, offset + done, buffer, JAVA_BYTE, 0, part);
-                        long sent = callLong(() -> (long) SEND.invokeExact(state, fd.number, buffer, (long) part, MSG_NOSIGNAL));
+                        long sent = callLong(() -> (long) Linux.SEND.invokeExact(state, fd.number, buffer, (long) part, MSG_NOSIGNAL));
                         if (sent < 0) {
                             if (errno(state) == EINTR) {
                                 continue;

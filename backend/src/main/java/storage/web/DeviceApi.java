@@ -22,4 +22,9 @@ public interface DeviceApi {
 
     /** Connects to a nearby device found by a scan or by LAN discovery. Throws IOException with a readable reason. */
     void connectDevice(String deviceId) throws IOException;
+
+    default void connectDevice(String deviceId, String address) throws IOException {
+        if (address != null) throw new IOException("selecting a connection address is not supported");
+        connectDevice(deviceId);
+    }
 }

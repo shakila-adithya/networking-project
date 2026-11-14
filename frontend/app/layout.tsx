@@ -3,7 +3,7 @@ import "@fontsource-variable/inter";
 import "./globals.css";
 import { Shell } from "@/components/shell";
 export const metadata: Metadata = {
-  title: "relay — Offline mesh",
+  title: "Relay — Offline Mesh Network",
   icons: { icon: "/icons/relay-mark.svg" },
   description: "Your nearby network. Connect, message, and share files.",
 };

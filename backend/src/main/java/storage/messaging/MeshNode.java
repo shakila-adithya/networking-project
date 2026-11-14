@@ -44,9 +44,25 @@ public final class MeshNode implements AutoCloseable {
         }
     });
 
-    private record NeighbourLink(Link link, String initiator) { }
+    private record NeighbourLink(Link link, String initiator, java.util.concurrent.atomic.AtomicLong lastHeard) {
+        NeighbourLink(Link link, String initiator) { this(link, initiator, new java.util.concurrent.atomic.AtomicLong(System.nanoTime())); }
+    }
+    private final long healthIntervalMillis;
+    private final long silenceTimeoutNanos;
+    private final java.util.concurrent.ScheduledExecutorService healthTimer = java.util.concurrent.Executors.newSingleThreadScheduledExecutor(r ->
+            Thread.ofPlatform().daemon().name("mesh-link-health").unstarted(r));
+    private final java.util.concurrent.ExecutorService healthWriters = java.util.concurrent.Executors.newVirtualThreadPerTaskExecutor();
+    private final Set<Link> healthPending = ConcurrentHashMap.newKeySet();
 
     public MeshNode(String localId, Transport transport, Forwarder forwarder) {
+        this(localId, transport, forwarder, java.time.Duration.ofSeconds(2), java.time.Duration.ofSeconds(12));
+    }
+    public MeshNode(String localId, Transport transport, Forwarder forwarder,
+                    java.time.Duration healthInterval, java.time.Duration silenceTimeout) {
+        if (healthInterval.toMillis() < 1 || silenceTimeout.compareTo(healthInterval.multipliedBy(2)) <= 0)
+            throw new IllegalArgumentException("Link silence timeout must exceed two health intervals");
+        healthIntervalMillis = healthInterval.toMillis();
+        silenceTimeoutNanos = silenceTimeout.toNanos();
         if (localId.isEmpty() || localId.equals(Message.BROADCAST)) {
             throw new IllegalArgumentException("invalid device id");
         }
@@ -63,8 +79,10 @@ public final class MeshNode implements AutoCloseable {
 
     public void start() throws IOException {
         running = true;
-        transport.start(link -> launchReader(link, false));
+        transport.start(link -> launchReader(link, false, null));
         announcePresence();
+        healthTimer.scheduleWithFixedDelay(new LinkHealthTask(this), healthIntervalMillis, healthIntervalMillis,
+                java.util.concurrent.TimeUnit.MILLISECONDS);
     }
 
     /** The friendly name this device shows to others (empty = none chosen, others show the id). */
@@ -147,7 +165,19 @@ public final class MeshNode implements AutoCloseable {
 
     /** Opens a link to a device at a transport address; the neighbour's id is learned from its HELLO. */
     public void connectTo(String address) throws IOException {
-        launchReader(transport.connect(address), true);
+        launchReader(transport.connect(address), true, null);
+    }
+
+    /** Discovery IDs are claims: require the authenticated HELLO to match before reporting a dial successful. */
+    public void connectTo(String address, String expectedDeviceId) throws IOException {
+        Link link = transport.connect(address);
+        var outcome = launchReader(link, true, expectedDeviceId);
+        try { outcome.get(10, java.util.concurrent.TimeUnit.SECONDS); }
+        catch (InterruptedException e) { Thread.currentThread().interrupt(); link.close(); throw new IOException("Connection interrupted", e); }
+        catch (java.util.concurrent.TimeoutException e) { link.close(); throw new IOException("Peer did not complete HELLO; update Relay on both devices", e); }
+        catch (java.util.concurrent.ExecutionException e) {
+            link.close(); throw new IOException("Peer identity handshake failed: " + e.getCause().getMessage(), e.getCause());
+        }
     }
 
     public void setHandler(MessageType type, Consumer<Message> handler) {
@@ -164,9 +194,16 @@ public final class MeshNode implements AutoCloseable {
     public Map<String, String> neighbourKinds() {
         Map<String, String> kinds = new HashMap<>();
         for (Map.Entry<String, NeighbourLink> entry : neighbours.entrySet()) {
-            kinds.put(entry.getKey(), entry.getValue().link().remoteAddress().startsWith("bt:") ? "bluetooth" : "tcp");
+            kinds.put(entry.getKey(), entry.getValue().link().kind());
         }
         return kinds;
+    }
+
+    /** Actual connected carrier addresses; a different candidate for the peer is not an active link. */
+    public Map<String, String> neighbourAddresses() {
+        Map<String, String> addresses = new HashMap<>();
+        neighbours.forEach((id, neighbour) -> addresses.put(id, neighbour.link().remoteAddress()));
+        return addresses;
     }
 
     public Set<String> neighbourIds() {
@@ -179,13 +216,19 @@ public final class MeshNode implements AutoCloseable {
         return sendToHops(message, null);
     }
 
-    private void launchReader(Link link, boolean initiatedLocally) {
+    private java.util.concurrent.CompletableFuture<String> launchReader(Link link, boolean initiatedLocally, String expectedId) {
+        var outcome = new java.util.concurrent.CompletableFuture<String>();
+        java.util.concurrent.ScheduledFuture<?> deadline;
+        try { deadline = healthTimer.schedule(link::close, 10, java.util.concurrent.TimeUnit.SECONDS); }
+        catch (RuntimeException e) { link.close(); throw e; }
         try {
-            Thread worker = new Thread(new LinkReader(this, link, initiatedLocally),
+            Thread worker = new Thread(new LinkReader(this, link, initiatedLocally, expectedId, outcome, deadline),
                     "mesh-link-" + localId + "-" + link.remoteAddress());
             worker.setDaemon(true);
             worker.start();
+            return outcome;
         } catch (RuntimeException | Error failure) {
+            deadline.cancel(false);
             link.close();
             throw failure;
         }
@@ -207,6 +250,7 @@ public final class MeshNode implements AutoCloseable {
         boolean[] accepted = {false};
         Link[] replaced = {null};
         neighbours.compute(remoteId, (id, existing) -> {
+            if (existing == null && neighbours.size() >= 64) return null;
             if (existing == null || !existing.link().isOpen()) {
                 accepted[0] = true;
                 return new NeighbourLink(link, initiator);
@@ -241,6 +285,16 @@ public final class MeshNode implements AutoCloseable {
     }
 
     void receive(Message message, String fromNeighbour) {
+        NeighbourLink sender = neighbours.get(fromNeighbour);
+        if (sender != null) sender.lastHeard().set(System.nanoTime());
+        if (message.type() == MessageType.LINK_PING || message.type() == MessageType.LINK_PONG) {
+            if (message.type() == MessageType.LINK_PING && message.source().equals(fromNeighbour)
+                    && message.destination().equals(localId) && message.ttl() == 1) {
+                sendTo(fromNeighbour, new Message(UUID.randomUUID(), localId, fromNeighbour, MessageType.LINK_PONG,
+                        1, System.currentTimeMillis(), new byte[0]));
+            }
+            return; // link health frames never leave their direct link
+        }
         if (message.type() == MessageType.HELLO) {
             return;
         }
@@ -307,9 +361,25 @@ public final class MeshNode implements AutoCloseable {
         return sent;
     }
 
+    /** Closes silent carriers even when TCP has not yet reported a lost radio/network. */
+    void checkLinkHealth() {
+        if (!running) return;
+        long now = System.nanoTime();
+        neighbours.forEach((id, neighbour) -> {
+            if (now - neighbour.lastHeard().get() > silenceTimeoutNanos) {
+                neighbour.link().close(); unregister(id, neighbour.link());
+            } else if (healthPending.add(neighbour.link())) {
+                try { healthWriters.submit(new LinkPingTask(this, id, neighbour.link(), healthPending)); }
+                catch (java.util.concurrent.RejectedExecutionException shutdown) { healthPending.remove(neighbour.link()); }
+            }
+        });
+    }
+
     @Override
     public void close() {
         running = false;
+        healthTimer.shutdownNow();
+        healthWriters.shutdownNow();
         for (NeighbourLink neighbour : neighbours.values()) {
             neighbour.link().close();
         }

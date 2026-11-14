@@ -127,10 +127,41 @@ class TopologyPlanTest {
     }
 
     @Test
+    void retainsSeparateAddressesAndTriesAnotherAfterFailure() {
+        TopologyController tc = controller();
+        tc.offerPermanent(new Candidate("P", "wifi-address", 90));
+        tc.offer(new Candidate("P", "bt:address", 50));
+        assertEquals(2, tc.status().size());
+        var unknown = assertThrows(java.io.IOException.class, () -> tc.connectNow("P", "not-an-observed-address"));
+        assertTrue(unknown.getMessage().contains("unknown device or address"));
+        assertEquals(List.of("wifi-address"), tc.plan(Set.of(), Set.of()).stream().map(Candidate::address).toList());
+        tc.tick(); // The first address is unavailable, so its individual backoff begins.
+        assertEquals(List.of("bt:address"), tc.plan(Set.of(), Set.of()).stream().map(Candidate::address).toList());
+        now.addAndGet(31_000);
+        assertEquals(List.of("wifi-address"), tc.plan(Set.of(), Set.of()).stream().map(Candidate::address).toList());
+    }
+
+    @Test
     void policyRejectsInconsistentLimits() {
         assertThrows(IllegalArgumentException.class, () -> new TopologyPolicy(3, 2, 5, 0,
                 Duration.ZERO, Duration.ZERO, Duration.ZERO, Duration.ZERO));
         assertThrows(IllegalArgumentException.class, () -> new TopologyPolicy(2, 5, 5, 0,
                 Duration.ZERO, Duration.ZERO, Duration.ZERO, Duration.ZERO));
+    }
+    @Test void onlyTheActualCandidateAddressIsReportedAsConnected() throws Exception {
+        try (MeshNode local = new MeshNode("ME", net.node("ME"), new FloodForwarder());
+             MeshNode remote = new MeshNode("P", net.node("P"), new FloodForwarder())) {
+            local.start(); remote.start(); net.setInRange("ME", "P", true);
+            TopologyController controller = new TopologyController(local, policy, Set::of);
+            controller.offer(new Candidate("P", "P", 80));
+            controller.offer(new Candidate("P", "other-address", 70));
+            var connected = new java.util.concurrent.CountDownLatch(1);
+            local.onNeighbourChange(id -> connected.countDown(), id -> {});
+            local.connectTo("P");
+            assertTrue(connected.await(3, java.util.concurrent.TimeUnit.SECONDS));
+            assertTrue(local.neighbourIds().contains("P"));
+            assertTrue(controller.status().stream().filter(c -> c.candidate().address().equals("P")).findFirst().orElseThrow().connected());
+            assertFalse(controller.status().stream().filter(c -> c.candidate().address().equals("other-address")).findFirst().orElseThrow().connected());
+        }
     }
 }

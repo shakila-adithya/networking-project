@@ -144,6 +144,26 @@ public final class MeshFileService implements AutoCloseable {
         return result;
     }
 
+    /** Receiver progress is separate from sender delivery acknowledgements and never exposes partial content. */
+    public record IncomingStatus(UUID transferId, UUID fileId, String fileName, String from,
+                                 long size, int percent, String state, String error) { }
+    public List<IncomingStatus> incomingTransfers() {
+        synchronized (incoming) {
+            List<IncomingStatus> result = new ArrayList<>();
+            for (IncomingTransfer transfer : incoming.values()) {
+                synchronized (transfer) {
+                    int count = transfer.receivedChunks().cardinality();
+                    int percent = transfer.totalChunks == 0 ? 100 : (int)((long)count * 100 / transfer.totalChunks);
+                    String state = transfer.isCompleted() ? (transfer.completedOk() ? "RECEIVED" : "FAILED")
+                            : transfer.idleMillis() > stallDisplayMillis() ? "WAITING" : "RECEIVING";
+                    result.add(new IncomingStatus(transfer.transferId, transfer.metadata.fileId(), transfer.metadata.fileName(),
+                            transfer.from, transfer.metadata.size(), percent, state, transfer.completedReason()));
+                }
+            }
+            return result;
+        }
+    }
+
     /** A transfer is shown as "waiting for a route" after a few unanswered chunk timeouts. */
     private long stallDisplayMillis() {
         return Math.max(1_000, config.chunkTimeout().toMillis() * 2);

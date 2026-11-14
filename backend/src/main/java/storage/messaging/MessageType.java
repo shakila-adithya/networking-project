@@ -25,5 +25,8 @@ public enum MessageType {
     /** File transfer: final result after the receiver verified and stored the file. */
     FILE_DONE,
     /** A device announces its display name. Broadcast (hop-limited) so devices several hops away learn it too. */
-    PRESENCE
+    PRESENCE,
+    /** Authenticated neighbour keepalive. Never routed or delivered to applications. */
+    LINK_PING,
+    LINK_PONG
 }

@@ -66,7 +66,7 @@ class InventoryTest {
         int firstPort = freePort();
         int secondPort = freePort();
         Path source = temporaryDirectory.resolve("shared.txt");
-        Files.writeString(source, "same replica metadata");
+        Files.writeString(source, "same shared-file metadata");
         UUID fileId = UUID.randomUUID();
         try (PeerServer first = new PeerServer("127.0.0.1", firstPort,
                     temporaryDirectory.resolve("first"));
@@ -75,8 +75,8 @@ class InventoryTest {
             first.start();
             second.start();
             assertTrue(PeerClient.upload("127.0.0.1", firstPort, source, fileId).success());
-            FileMetadata primaryMetadata = PeerClient.listFiles("127.0.0.1", firstPort).getFirst();
-            assertTrue(PeerClient.uploadReplica("127.0.0.1", secondPort, primaryMetadata, source).success());
+            FileMetadata sharedMetadata = PeerClient.listFiles("127.0.0.1", firstPort).getFirst();
+            assertTrue(PeerClient.deliver("127.0.0.1", secondPort, sharedMetadata, source).success());
 
             List<InventoryComparator.FileCopies> copies = InventoryComparator.compare(List.of(
                     InventoryComparator.SourceInventory.available("A",

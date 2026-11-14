@@ -11,6 +11,7 @@ type Transfer = {
   tid?: string; // mesh transfer id (live mode)
   size?: number;
   resumable?: boolean;
+  clientKey?: string;
 };
 type TransferStatus = {
   state: string;
@@ -25,7 +26,7 @@ function applyStatus(t: Transfer, s: TransferStatus): Transfer {
   if (s.state === "DELIVERED")
     return { ...t, state: "Delivered", progress: undefined, resumable: false, detail: `To ${peer}${sent}` };
   if (s.state === "FAILED")
-    return { ...t, state: "Waiting", progress: undefined, resumable: true, detail: s.error || "Transfer stopped" };
+    return { ...t, state: "Failed", progress: undefined, resumable: true, detail: s.error || "Transfer stopped" };
   if (s.stalled)
     return { ...t, state: "Waiting", progress: undefined, resumable: false, detail: `To ${peer} · waiting for a route · ${s.percent}% sent` };
   return { ...t, state: "Sending", progress: s.percent, resumable: false, detail: `To ${peer}${sent}` };
@@ -36,6 +37,7 @@ const samples: Transfer[] = [
     detail: "To Amaya · via Maya",
     state: "Sending",
     progress: 68,
+    size: 5 * 1024 * 1024,
   },
   { name: "Meeting point.jpg", detail: "To Maya · 840 KB", state: "Delivered" },
   {
@@ -44,6 +46,8 @@ const samples: Transfer[] = [
     state: "Received",
   },
   { name: "Photos.zip", detail: "To Kasun · 18 MB", state: "Waiting" },
+  { name: "Local guide.pdf", detail: "From Maya · 1.2 MB", state: "Receiving", progress: 32, size: Math.round(1.2 * 1024 * 1024) },
+  { name: "Notes.txt", detail: "To Ravi · transfer interrupted", state: "Failed" },
 ];
 export function Files() {
   const { preview, peers, files, refresh } = useMesh(),
@@ -52,12 +56,14 @@ export function Files() {
     [query, setQuery] = useState(""),
     [filter, setFilter] = useState("All"),
     [activity, setActivity] = useState<Transfer[]>([]),
+    [remoteActivity, setRemoteActivity] = useState<Transfer[]>([]),
     [busy, setBusy] = useState(false),
     [error, setError] = useState(""),
     [showAll, setShowAll] = useState(false),
     [dismissSample, setDismissSample] = useState(false);
   useEffect(() => {
     setActivity([]);
+    setRemoteActivity([]);
     setPicked([]);
     setError("");
   }, [preview]);
@@ -87,6 +93,28 @@ export function Files() {
     }, 1000);
     return () => clearInterval(timer);
   }, [activeKey, preview]);
+  // Include transfers started elsewhere and actual receiver progress; no simulated live states.
+  useEffect(() => {
+    if (preview) return;
+    let cancelled = false;
+    async function load() {
+      try {
+        const response = await request("/mesh/transfers");
+        const outgoing = (response.transfers || []).map((status: TransferStatus & { transferId: string; fileName: string; to: string; size: number }) =>
+          applyStatus({ name: status.fileName, detail: `To ${status.to}`, tid: status.transferId, size: status.size, state: "Sending" }, status));
+        const incoming = (response.incoming || []).map((status: { fileName: string; from: string; fileId: string; percent: number; size: number; state: string; error: string }) => ({
+          name: status.fileName, size: status.size, detail: `From ${status.from} · ${bytes(status.size)}${status.error ? ` · ${status.error}` : ""}`,
+          state: status.state === "RECEIVED" ? "Received" : status.state === "FAILED" ? "Failed" : status.state === "WAITING" ? "Waiting" : "Receiving",
+          progress: status.state === "RECEIVING" ? status.percent : undefined,
+          id: status.state === "RECEIVED" ? status.fileId : undefined,
+        }));
+        if (!cancelled) setRemoteActivity([...outgoing, ...incoming]);
+      } catch { /* Existing activity remains visible if the node temporarily stops responding. */ }
+    }
+    void load();
+    const timer = setInterval(load, 1000);
+    return () => { cancelled = true; clearInterval(timer); };
+  }, [preview]);
   async function resume(tid: string) {
     try {
       const status = (await request("/mesh/transfers/" + tid + "/resume", { method: "POST" })) as TransferStatus;
@@ -100,21 +128,20 @@ export function Files() {
     hasSample = preview && !picked.length && !dismissSample,
     total = picked.reduce((s, f) => s + f.size, 0),
     names = recipients.map((p) => p.name).join(", ");
-  const transfers: Transfer[] = preview
-    ? [...activity, ...samples]
-    : [
-        ...activity,
-        ...files.map((f) => ({
-          name: f.fileName,
-          detail: `Stored locally · ${bytes(f.size)}`,
-          state: "Received",
-          id: f.fileId,
-        })),
-      ];
+  const liveActivity = [...activity.filter(t => !t.tid || !remoteActivity.some(remote => remote.tid === t.tid)), ...remoteActivity];
+  const transfers: Transfer[] = preview ? [...activity, ...samples] : [
+    ...liveActivity,
+    ...files.filter(file => !liveActivity.some(t => t.id === file.fileId)).map(file => ({
+      name: file.fileName, detail: `Saved on this device · ${bytes(file.size)}`, state: "Received", id: file.fileId,
+    })),
+  ];
+  const filters = ["All", "Sending", "Receiving", "Sent", "Received", "Waiting for a route", "Failed"];
+  const matchesFilter = (t: Transfer) => filter === "All" || t.state === (filter === "Sent" ? "Delivered" : filter === "Waiting for a route" ? "Waiting" : filter);
+  const visibleTransfers = transfers.filter(matchesFilter);
   function add(list: FileList | null) {
     if (!list) return;
     const added = Array.from(list);
-    setPicked((prev) => [...prev, ...added]);
+    setPicked((prev) => [...prev, ...added.filter(file => !prev.some(existing => existing.name === file.name && existing.size === file.size && existing.lastModified === file.lastModified))]);
     setDismissSample(true);
     setError("");
   }
@@ -150,6 +177,8 @@ export function Files() {
           continue;
         }
         for (const peer of recipients) {
+          const clientKey = crypto.randomUUID();
+          setActivity(previous => [{ name: file.name, detail: `To ${peer.name} · ${bytes(file.size)}`, state: "Sending", clientKey }, ...previous]);
           try {
             const r = await request(
               "/files?recipient=" + encodeURIComponent(peer.id),
@@ -184,10 +213,11 @@ export function Files() {
                     detail: `To ${peer.name} · ${bytes(file.size)}`,
                     state: "Delivered",
                   },
-              ...a,
+              ...a.filter(item => item.clientKey !== clientKey),
             ]);
           } catch (e) {
             // One unreachable recipient must not stop the others.
+            setActivity(previous => previous.map(item => item.clientKey === clientKey ? { ...item, state: "Failed", detail: `To ${peer.name} · ${(e as Error).message}` } : item));
             failures.push(`${peer.name}: ${(e as Error).message}`);
           }
         }
@@ -308,13 +338,7 @@ export function Files() {
                   </b>
                   <small>Total size: {hasSample ? "5 MB" : bytes(total)}</small>
                 </div>
-                <button
-                  className="button"
-                  onClick={() => input.current?.click()}
-                >
-                  <Icon name="plus-icon-2" />
-                  Add more
-                </button>
+
               </div>
             </section>
             <section className="step recipients">
@@ -380,7 +404,7 @@ export function Files() {
                   ))}
                 {!peers.length && (
                   <p className="empty">
-                    No nearby recipients. Open Settings to connect another peer.
+                    No nearby recipients. Open the Network map to connect to other devices.
                   </p>
                 )}
               </div>
@@ -428,11 +452,13 @@ export function Files() {
           <Eyebrow>TRANSFER ACTIVITY</Eyebrow>
           <h2>Recent transfers</h2>
           <p>Keep track of files moving through the mesh.</p>
-          <div className="filters">
-            {["All", "Sending", "Received", "Waiting"].map((v) => (
+          <div className="filters" role="group" aria-label="Filter transfers">
+            {filters.map((v) => (
               <button
                 key={v}
                 onClick={() => setFilter(v)}
+                data-state={v}
+                aria-pressed={v === filter}
                 className={v === filter ? "active" : ""}
               >
                 {v}
@@ -440,9 +466,7 @@ export function Files() {
             ))}
           </div>
           <div className="transfers">
-            {transfers
-              .filter((t) => filter === "All" || t.state === filter)
-              .map((t, i) => (
+            {visibleTransfers.map((t, i) => (
                 <div
                   key={i}
                   className={`transfer-item ${t.progress !== undefined ? "in-progress" : ""}`}
@@ -450,32 +474,11 @@ export function Files() {
                   <div className="row">
                     <FileTile name={t.name} />
                     <div className="transfer-description">
-                      <b>{t.name}</b>
+                      <b title={t.name}>{t.name}</b>
                       <small>{t.detail}</small>
-                      {t.progress === undefined && (
-                        <span
-                          className={
-                            t.state === "Delivered"
-                              ? "green"
-                              : t.state === "Received"
-                                ? "cyan"
-                                : "gold-text"
-                          }
-                        >
-                          <Icon
-                            name={
-                              t.state === "Delivered"
-                                ? "check-icon"
-                                : t.state === "Received"
-                                  ? "download-icon"
-                                  : "clock-icon-2"
-                            }
-                          />
-                          {t.state === "Waiting"
-                            ? "Waiting for route"
-                            : t.state}
-                        </span>
-                      )}
+                      <span className={`transfer-status ${t.state === "Delivered" ? "delivered" : t.state === "Received" ? "received" : t.state === "Failed" ? "failed" : t.state === "Waiting" ? "waiting" : "moving"}`}>
+                        <i className="status-dot" />{t.state === "Waiting" ? "Waiting for a route" : t.state}
+                      </span>
                     </div>
                     {t.progress !== undefined ? (
                       <b className="gold-text">{t.progress}%</b>
@@ -491,9 +494,7 @@ export function Files() {
                       >
                         <Icon name="download-icon" />
                       </a>
-                    ) : (
-                      <Icon name="more-icon-2" />
-                    )}
+                    ) : null}
                   </div>
                   {t.progress !== undefined && (
                     <>
@@ -504,17 +505,17 @@ export function Files() {
                         <small>
                           {t.size
                             ? `${bytes(Math.round((t.size * t.progress) / 100))} of ${bytes(t.size)}`
-                            : "3.4 MB of 5 MB"}
+                            : "Progress reported by the device"}
                         </small>
                         <small className="cyan">
-                          {t.tid ? "Sending over the mesh" : "Sending · 2 hops"}
+                          {t.state === "Receiving" ? "Receiving over the mesh" : "Sending over the mesh"}
                         </small>
                       </div>
                     </>
                   )}
                 </div>
               ))}
-            {!transfers.length && <p className="empty">No transfers yet.</p>}
+            {!visibleTransfers.length && <p className="empty">{filter === "All" ? "No transfers yet." : `No ${filter.toLowerCase()} transfers.`}</p>}
           </div>
           <div className="info-card">
             <Icon name="refresh-icon-3" />

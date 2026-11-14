@@ -1,6 +1,5 @@
 package storage.transport;
 
-import storage.cluster.ReplicationManager;
 import storage.files.FileMetadata;
 import storage.files.FileStore;
 import storage.files.InventoryJson;
@@ -26,7 +25,15 @@ public final class PeerServer implements AutoCloseable {
     private final String bindAddress;
     private final int port;
     private final FileStore fileStore;
-    private final ReplicationManager replicationManager;
+    private final String localPeerId;
+    private storage.security.MeshSecurity security;
+    private final java.util.concurrent.Semaphore authenticationSlots = new java.util.concurrent.Semaphore(4);
+
+    public PeerServer secure(storage.security.MeshSecurity security) {
+        if (running) throw new IllegalStateException("configure security before start");
+        this.security = java.util.Objects.requireNonNull(security);
+        return this;
+    }
     private final Set<Socket> activeClients = ConcurrentHashMap.newKeySet();
     private volatile boolean running;
     private ServerSocket serverSocket;
@@ -38,7 +45,7 @@ public final class PeerServer implements AutoCloseable {
 
     public PeerServer(String peerName, String bindAddress, int port) throws IOException {
         this(bindAddress, port, peerDirectory(peerName),
-                ReplicationManager.initialConfiguration(peerName));
+                peerName);
     }
 
     public PeerServer(String bindAddress, int port, Path storageDirectory) throws IOException {
@@ -46,14 +53,14 @@ public final class PeerServer implements AutoCloseable {
     }
 
     public PeerServer(String bindAddress, int port, Path storageDirectory,
-                      ReplicationManager replicationManager) throws IOException {
+                      String localPeerId) throws IOException {
         this.bindAddress = Objects.requireNonNull(bindAddress, "bindAddress");
         if (port < 1 || port > 65_535) {
             throw new IllegalArgumentException("port must be between 1 and 65535");
         }
         this.port = port;
         this.fileStore = new FileStore(Objects.requireNonNull(storageDirectory, "storageDirectory"));
-        this.replicationManager = replicationManager;
+        this.localPeerId = localPeerId;
     }
 
     private static Path peerDirectory(String peerName) {
@@ -68,7 +75,10 @@ public final class PeerServer implements AutoCloseable {
         if (running) {
             throw new IllegalStateException("server is already running");
         }
-        serverSocket = new ServerSocket(port, 50, InetAddress.getByName(bindAddress));
+        InetAddress bind = InetAddress.getByName(bindAddress);
+        if (security == null && !bind.isLoopbackAddress())
+            throw new IOException("Unauthenticated file servers may only bind loopback protocol fixtures. Configure a mesh password before listening on a network.");
+        serverSocket = new ServerSocket(port, 50, bind);
         running = true;
         acceptThread = new Thread(new AcceptLoop(this), "peer-accept-" + port);
         acceptThread.setDaemon(true); // close() stops it; daemon so a missed close cannot keep the JVM alive
@@ -104,6 +114,10 @@ public final class PeerServer implements AutoCloseable {
     }
 
     private void dispatch(Socket client) {
+        if (activeClients.size() >= 64) {
+            try { client.close(); } catch (IOException e) { System.err.println("Could not close excess client: " + e.getMessage()); }
+            return;
+        }
         activeClients.add(client);
         try {
             Thread worker = new Thread(new ClientHandler(this, client), "peer-client-" + client.getPort());
@@ -124,9 +138,9 @@ public final class PeerServer implements AutoCloseable {
     /** Serves one connection; the calling ClientHandler owns the socket and it is closed here. */
     void handleClient(Socket client) {
         try (client;
-             InputStream input = new BufferedInputStream(client.getInputStream());
-             OutputStream output = new BufferedOutputStream(client.getOutputStream())) {
-            client.setSoTimeout(CLIENT_READ_TIMEOUT_MILLIS);
+             SecureConnection connection = openConnection(client);
+             InputStream input = new BufferedInputStream(connection.input());
+             OutputStream output = new BufferedOutputStream(connection.output())) {
             String request = Protocol.readLine(input);
             if (request == null) {
                 return;
@@ -136,9 +150,10 @@ public final class PeerServer implements AutoCloseable {
             } else if (request.equals("LIST_FILES")) {
                 handleListFiles(output);
             } else if (request.startsWith("PUT ")) {
-                handlePut(request, input, output, "PUT", true);
+                handlePut(request, input, output, "PUT");
             } else if (request.startsWith("REPLICA_PUT ")) {
-                handlePut(request, input, output, "REPLICA_PUT", false);
+                // Legacy alias: a single delivery, with the same no-overwrite checks as PUT.
+                handlePut(request, input, output, "REPLICA_PUT");
             } else if (request.startsWith("GET ")) {
                 handleGet(request, output);
             } else if (request.startsWith("DELETE ")) {
@@ -153,6 +168,21 @@ public final class PeerServer implements AutoCloseable {
         } finally {
             activeClients.remove(client);
         }
+    }
+
+    private record SecureConnection(InputStream input, OutputStream output) implements AutoCloseable {
+        public void close() throws IOException { input.close(); }
+    }
+    private SecureConnection openConnection(Socket client) throws IOException {
+        client.setSoTimeout(CLIENT_READ_TIMEOUT_MILLIS);
+        if (security == null) return new SecureConnection(client.getInputStream(), client.getOutputStream());
+        if (!authenticationSlots.tryAcquire()) throw new IOException("Authentication busy; retry shortly");
+        try {
+            Link raw = new FramedStreamLink(client.getInputStream(), client.getOutputStream(), client,
+                    client.getRemoteSocketAddress().toString());
+            Link encrypted = security.authenticate(raw, false, "file-service");
+            return new SecureConnection(storage.security.LinkStreams.input(encrypted), storage.security.LinkStreams.output(encrypted));
+        } finally { authenticationSlots.release(); }
     }
 
     private void handleListFiles(OutputStream output) throws IOException {
@@ -171,7 +201,7 @@ public final class PeerServer implements AutoCloseable {
     }
 
     private void handlePut(String request, InputStream input, OutputStream output,
-                           String expectedCommand, boolean replicate) throws IOException {
+                           String expectedCommand) throws IOException {
         FileStore.UploadSession session = null;
         try {
             String[] parts = request.split(" ", -1);
@@ -181,36 +211,17 @@ public final class PeerServer implements AutoCloseable {
             }
             int metadataLength = parseMetadataLength(parts[1]);
             FileMetadata metadata = MetadataJson.decode(Protocol.readExactly(input, metadataLength));
-            if (metadata.recipients() != null && (replicationManager == null
-                    || !metadata.recipients().contains(replicationManager.localPeerName()))) {
+            if (metadata.recipients() != null && (localPeerId == null
+                    || !metadata.recipients().contains(localPeerId))) {
                 throw new Protocol.ProtocolException("NOT_A_RECIPIENT", "This peer is not a selected recipient");
             }
-            session = "REPLICA_PUT".equals(expectedCommand)
-                    ? fileStore.reserveReplicaUpload(metadata)
-                    : fileStore.reserveUpload(metadata);
+            session = fileStore.reserveUpload(metadata);
             Protocol.writeLine(output, "READY");
             session.receive(input);
             session.close();
             session = null;
 
-            ReplicationManager.ReplicationResult replication = null;
-            if (replicate && replicationManager != null && metadata.recipients() == null) {
-                try {
-                    replication = replicationManager.replicate(fileStore.open(metadata.fileId()));
-                } catch (FileStore.StorageException | IOException e) {
-                    replication = ReplicationManager.ReplicationResult.failure(
-                            "REPLICATION_ERROR", e.getMessage(), null);
-                }
-            }
-
-            if (replication != null && !replication.success()) {
-                String reason = replication.code() + ": " + Protocol.safeMessage(replication.message());
-                System.err.printf("Replication failed for %s: %s%n", metadata.fileId(), reason);
-                Protocol.writeLine(output,
-                        "OK STORED " + metadata.fileId() + " REPLICATION_FAILED " + reason);
-            } else {
-                Protocol.writeLine(output, "OK STORED " + metadata.fileId());
-            }
+            Protocol.writeLine(output, "OK STORED " + metadata.fileId());
         } catch (Protocol.ProtocolException e) {
             sendError(output, e.code(), e.getMessage());
         } catch (FileStore.StorageException e) {
