@@ -22,15 +22,6 @@ import static java.lang.foreign.ValueLayout.JAVA_INT;
 import static java.lang.foreign.ValueLayout.JAVA_LONG;
 import static java.lang.foreign.ValueLayout.JAVA_SHORT;
 
-/**
- * RFCOMM over the Linux kernel Bluetooth stack (AF_BLUETOOTH / BTPROTO_RFCOMM sockets), called directly through
- * the JDK's Foreign Function &amp; Memory API: no native library to install or ship and no root needed.
- * Linux only. The caller runs with {@code --enable-native-access=ALL-UNNAMED} to avoid a warning.
- *
- * <p>Closing a connection or server first calls {@code shutdown()} so threads blocked in read/accept wake up,
- * then waits for in-flight calls to finish before {@code close()} releases the descriptor, so a descriptor
- * number can never be reused while another thread still holds it.
- */
 public final class NativeRfcomm implements RfcommApi {
     private static final int AF_BLUETOOTH = 31;
     private static final int SOCK_STREAM = 1;
@@ -62,20 +53,30 @@ public final class NativeRfcomm implements RfcommApi {
     private static final MethodHandle SETSOCKOPT;
 
     static {
-        SymbolLookup libc = LINKER.defaultLookup();
-        Linker.Option errno = Linker.Option.captureCallState("errno");
-        SOCKET = handle(libc, "socket", FunctionDescriptor.of(JAVA_INT, JAVA_INT, JAVA_INT, JAVA_INT), errno);
-        BIND = handle(libc, "bind", FunctionDescriptor.of(JAVA_INT, JAVA_INT, ADDRESS, JAVA_INT), errno);
-        LISTEN = handle(libc, "listen", FunctionDescriptor.of(JAVA_INT, JAVA_INT, JAVA_INT), errno);
-        ACCEPT = handle(libc, "accept", FunctionDescriptor.of(JAVA_INT, JAVA_INT, ADDRESS, ADDRESS), errno);
-        CONNECT = handle(libc, "connect", FunctionDescriptor.of(JAVA_INT, JAVA_INT, ADDRESS, JAVA_INT), errno);
-        CLOSE = handle(libc, "close", FunctionDescriptor.of(JAVA_INT, JAVA_INT));
-        SHUTDOWN = handle(libc, "shutdown", FunctionDescriptor.of(JAVA_INT, JAVA_INT, JAVA_INT));
-        RECV = handle(libc, "recv", FunctionDescriptor.of(JAVA_LONG, JAVA_INT, ADDRESS, JAVA_LONG, JAVA_INT), errno);
-        SEND = handle(libc, "send", FunctionDescriptor.of(JAVA_LONG, JAVA_INT, ADDRESS, JAVA_LONG, JAVA_INT), errno);
-        POLL = handle(libc, "poll", FunctionDescriptor.of(JAVA_INT, ADDRESS, JAVA_LONG, JAVA_INT), errno);
-        SETSOCKOPT = handle(libc, "setsockopt",
-                FunctionDescriptor.of(JAVA_INT, JAVA_INT, JAVA_INT, JAVA_INT, ADDRESS, JAVA_INT));
+        if (isLinux()) {
+            SymbolLookup libc = LINKER.defaultLookup();
+            Linker.Option errno = Linker.Option.captureCallState("errno");
+            SOCKET = handle(libc, "socket", FunctionDescriptor.of(JAVA_INT, JAVA_INT, JAVA_INT, JAVA_INT), errno);
+            BIND = handle(libc, "bind", FunctionDescriptor.of(JAVA_INT, JAVA_INT, ADDRESS, JAVA_INT), errno);
+            LISTEN = handle(libc, "listen", FunctionDescriptor.of(JAVA_INT, JAVA_INT, JAVA_INT), errno);
+            ACCEPT = handle(libc, "accept", FunctionDescriptor.of(JAVA_INT, JAVA_INT, ADDRESS, ADDRESS), errno);
+            CONNECT = handle(libc, "connect", FunctionDescriptor.of(JAVA_INT, JAVA_INT, ADDRESS, JAVA_INT), errno);
+            CLOSE = handle(libc, "close", FunctionDescriptor.of(JAVA_INT, JAVA_INT));
+            SHUTDOWN = handle(libc, "shutdown", FunctionDescriptor.of(JAVA_INT, JAVA_INT, JAVA_INT));
+            RECV = handle(libc, "recv", FunctionDescriptor.of(JAVA_LONG, JAVA_INT, ADDRESS, JAVA_LONG, JAVA_INT), errno);
+            SEND = handle(libc, "send", FunctionDescriptor.of(JAVA_LONG, JAVA_INT, ADDRESS, JAVA_LONG, JAVA_INT), errno);
+            POLL = handle(libc, "poll", FunctionDescriptor.of(JAVA_INT, ADDRESS, JAVA_LONG, JAVA_INT), errno);
+            SETSOCKOPT = handle(libc, "setsockopt",
+                    FunctionDescriptor.of(JAVA_INT, JAVA_INT, JAVA_INT, JAVA_INT, ADDRESS, JAVA_INT));
+        } else {
+            // The class is loaded by the cross-platform runtime even when TCP is selected.
+            // Do not resolve Linux libc symbols on Windows or another non-Linux platform.
+            SOCKET = BIND = LISTEN = ACCEPT = CONNECT = CLOSE = SHUTDOWN = RECV = SEND = POLL = SETSOCKOPT = null;
+        }
+    }
+
+    private static boolean isLinux() {
+        return System.getProperty("os.name", "").toLowerCase(Locale.ROOT).contains("linux");
     }
 
     private static MethodHandle handle(SymbolLookup libc, String name, FunctionDescriptor descriptor,
@@ -86,7 +87,7 @@ public final class NativeRfcomm implements RfcommApi {
 
     /** True on Linux when the kernel offers RFCOMM sockets (the {@code rfcomm} module is loaded or built in). */
     public static boolean isSupported() {
-        if (!System.getProperty("os.name", "").toLowerCase(Locale.ROOT).contains("linux")) {
+        if (!isLinux() || SOCKET == null) {
             return false;
         }
         try (Arena arena = Arena.ofConfined()) {

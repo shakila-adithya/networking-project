@@ -50,6 +50,12 @@ Hardware tests in the repo: `NativeRfcommHardwareTest` (real kernel sockets; run
 `./mvnw test -Drelay.hardwareTests=true -Dtest=BlueZAdapterHardwareTest,NativeRfcommHardwareTest` (renames the adapter
 for a moment, scans, tries a real connection to a device that is not there).
 
+## Windows and IP fallback
+
+The Bluetooth implementation in this document is Linux/BlueZ only. On Windows, run with `-Dmesh.transport=tcp` or the default `both`; the runtime safely detects that Linux RFCOMM is unavailable and keeps the TCP carrier. Windows peers can still discover one another and Linux peers through the authenticated IP JOIN path. Discovery sends to multicast plus configured peer addresses and the local directed broadcast, so the Windows Private-network firewall must allow the configured peer TCP port and discovery UDP port.
+
+This is deliberately not described as Windows Bluetooth: Windows Bluetooth service records, Wi-Fi Direct advertisements, and Mobile Hotspot APIs are not implemented here. A future Windows adapter must provide those through a separate platform boundary and must be tested on two Windows devices.
+
 ## What has and has not been verified
 Verified **on real hardware (one laptop, controller `hci0`)**: opening, binding, listening on and closing real RFCOMM sockets
 (including waking a thread blocked in accept); a real BlueZ scan listing real nearby devices; advertising as `relay:<id>`

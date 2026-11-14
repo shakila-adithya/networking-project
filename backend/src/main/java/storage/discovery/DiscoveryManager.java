@@ -11,6 +11,7 @@ import java.net.InetAddress;
 import java.net.MulticastSocket;
 import java.net.NetworkInterface;
 import java.net.InetSocketAddress;
+import java.net.InterfaceAddress;
 import java.net.SocketTimeoutException;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
@@ -40,6 +41,7 @@ public final class DiscoveryManager implements AutoCloseable {
     private final PeerRegistry registry;
     private final Consumer<ReplicationManager.PeerEndpoint> peerListener;
     private final ConcurrentHashMap<String, RateWindow> rateWindows = new ConcurrentHashMap<>();
+    private final ConcurrentHashMap<String, Long> recentNonces = new ConcurrentHashMap<>();
     private final ScheduledExecutorService announcer;
     private final AtomicBoolean running = new AtomicBoolean();
     private final AtomicLong received = new AtomicLong();
@@ -129,8 +131,25 @@ public final class DiscoveryManager implements AutoCloseable {
     private void announce() throws IOException {
         byte[] bytes = encode(createJoin(configuration, System.currentTimeMillis(), UUID.randomUUID().toString()));
         if (bytes.length > MAX_MESSAGE_SIZE) throw new IOException("discovery message exceeds size limit");
-        DatagramPacket packet = new DatagramPacket(bytes, bytes.length,
-                InetAddress.getByName(configuration.discoveryGroup()), configuration.discoveryPort());
+        // Multicast is the normal path. Unicast and directed broadcast make discovery work on
+        // Windows/Wi-Fi networks that do not forward multicast; the same HMAC validation applies.
+        send(bytes, InetAddress.getByName(configuration.discoveryGroup()));
+        for (PeerConfiguration.PeerDefinition peer : configuration.peers()) {
+            if (!peer.id().equals(configuration.localPeerId())) {
+                send(bytes, InetAddress.getByName(peer.address()));
+            }
+        }
+        NetworkInterface networkInterface = multicastInterface;
+        if (networkInterface != null) {
+            for (InterfaceAddress address : networkInterface.getInterfaceAddresses()) {
+                InetAddress broadcast = address.getBroadcast();
+                if (broadcast != null) send(bytes, broadcast);
+            }
+        }
+    }
+
+    private void send(byte[] bytes, InetAddress destination) throws IOException {
+        DatagramPacket packet = new DatagramPacket(bytes, bytes.length, destination, configuration.discoveryPort());
         socket.send(packet);
     }
 
@@ -146,6 +165,17 @@ public final class DiscoveryManager implements AutoCloseable {
         } catch (IOException | IllegalArgumentException e) {
             reject("invalid message");
             return false;
+        }
+        // One JOIN may arrive through multicast, unicast, and directed broadcast. Authenticate before
+        // remembering its nonce, then suppress those transport-level duplicates before rate limiting.
+        if (message.peerId() != null && message.nonce() != null && validSignature(message)) {
+            long now = System.currentTimeMillis();
+            String nonceKey = sourceAddress.getHostAddress() + "/" + message.peerId() + "/" + message.nonce();
+            Long previous = recentNonces.putIfAbsent(nonceKey, now);
+            recentNonces.entrySet().removeIf(entry -> now - entry.getValue() > MAX_CLOCK_SKEW_MILLIS);
+            if (previous != null && now - previous <= MAX_CLOCK_SKEW_MILLIS) {
+                return false;
+            }
         }
         String rateKey = sourceAddress.getHostAddress() + "/" + (message.peerId() == null ? "?" : message.peerId());
         if (!allow(rateKey)) {
