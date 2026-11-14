@@ -17,8 +17,8 @@ same computer. Your device is **hidden until you make it visible**.
 
 * **Settings → Your device name**: set the name other people see (up to 32 characters, any language). The device id (for example `C`) stays the
   stable internal address and is changed in Settings. Nothing about visibility is on this page.
-* **Network map** tab: select **your own device** on the map to get the **Visible to nearby devices** switch. Switching it on
-  advertises `<name> [relay:<id>]`; off puts the adapter back. The choice is remembered (`backend/config/device-profile.json`).
+* **Network map** tab: use the **Visible to nearby devices** switch above the map, even before joining. Switching it on
+  advertises `<name> [relay:<id>]`; off puts the adapter back and leaves the mesh in setup mode. Turning it on again does not rejoin. The choice is remembered (`backend/config/device-profile.json`).
 * **Network map, nothing selected**: the **Nearby devices** section. *Scan now* starts a Bluetooth scan (about 8 s; scans also run
   every 30 s). Relay devices and Relay peers on the LAN are listed first with signal, state (Connected / Connect / Retry with the
   reason it failed). Other Bluetooth devices are collapsed under one line. Discovered Relay devices also appear on the map as
@@ -43,7 +43,7 @@ re-read from an adapter that may be mid-change; an empty alias means "reset to t
 ## Testing with two real devices
 1. Two Linux laptops with Bluetooth, each running the app with `-Dmesh.transport=bluetooth` and **different device ids**
    (CLI: two different config files; or two setup-mode nodes).
-2. On each: select your device on the **Network map** and switch **Visible to nearby devices** on; then press **Scan now**. The other should appear under Nearby devices with a Connect button (CLI: `visible on`, then `bluetooth` lists `RELAY device <id>`).
+2. On each: use the switch above the **Network map** to turn **Visible to nearby devices** on; then press **Scan now**. The other should appear under Nearby devices with a Connect button (CLI: `visible on`, then `bluetooth` lists `RELAY device <id>`).
 3. Press Connect (devices also connect by themselves once visible); confirm with `neighbours` and `routes`, then `chat <id> hi` and `send-file <id> <path>`.
 4. Optional third laptop out of range of the first, in range of the second, to see a relayed message.
 Hardware tests in the repo: `NativeRfcommHardwareTest` (real kernel sockets; runs when RFCOMM is supported) and, opt-in,

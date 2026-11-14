@@ -15,8 +15,8 @@ final class LinkPingTask implements Runnable {
     }
     @Override public void run() {
         try {
-            node.sendTo(neighbour, new Message(UUID.randomUUID(), node.localId(), neighbour, MessageType.LINK_PING,
-                    1, System.currentTimeMillis(), new byte[0]));
+            node.writeCarrier(link, new Message(UUID.randomUUID(), node.localId(), neighbour, MessageType.LINK_PING,
+                    1, System.currentTimeMillis(), java.nio.ByteBuffer.allocate(8).putLong(System.nanoTime()).array()));
         } finally { pending.remove(link); }
     }
 }

@@ -14,6 +14,7 @@ Backend root package `storage`, one sub-package per responsibility:
 | `config` | `PeerConfiguration`, `SetupConfigStore`, `LocalNetworks` |
 | `transport` | `PeerServer` (`ServerSocket`), `PeerClient` (`Socket`), `Protocol` (framing); `Transport`/`Link` boundary with `TcpTransport` and the `InMemoryTransport` simulation |
 | `discovery` | `MeshDirectory` (unverified public UDP advertisements), legacy `DiscoveryManager`, `Candidate` |
+| `custody` | Atomic AES-GCM spool, OS-protected key, bounded handoffs and storage policy |
 | `security` | Bouncy Castle J-PAKE authentication, purpose-separated HKDF, TLS AES-GCM carriers |
 | `platform` | Linux NetworkManager D-Bus Wi-Fi Direct/hotspot control and verified IP interface kinds |
 | `device` | `DeviceProfile` (display name + visibility), `DeviceProfileStore`, `DeviceProfileService` |
@@ -21,7 +22,7 @@ Backend root package `storage`, one sub-package per responsibility:
 | `messaging` | `Message`/`MessageCodec`, `MeshNode` (neighbours, relay, dedupe), `ChatService` (ack + bounded retry) |
 | `transfer` | `MeshFileService`: chunked, acknowledged, resumable file transfer over routes (see [file-transfer.md](file-transfer.md)) |
 | `bluetooth` | `NativeRfcomm` (RFCOMM kernel sockets via FFM), `BluetoothTransport`, `BlueZAdapter`, `BluetoothScanner` (see [bluetooth.md](bluetooth.md)) |
-| `routing` | `AodvRouter`, `RoutingTable`, `LinkCost` (see [routing.md](routing.md)) |
+| `routing` | `AodvRouter`, `RoutingTable`, `LinkCost`, `MeshTopology` (authenticated bounded adjacency gossip) (see [routing.md](routing.md)) |
 | `cluster` | `PeerRegistry` (membership), `PeerEndpoint` (shared peer addresses) |
 | `files` | `FileStore`, `FileMetadata`, inventory/metadata JSON, hashing |
 | `web` | `RestApiServer`, `SetupAgent` (local UI API, no Internet needed) |
@@ -46,6 +47,7 @@ There is no automatic backup replication or storage repair. Files remain only on
 | `GET /api/mesh/transfers[/{id}]`, `POST /api/mesh/transfers/{id}/resume` | `MeshFileService` (progress, resume) |
 | `bluetooth` object in `GET /api/mesh` | `MeshRuntime.bluetoothStatus` (adapter, nearby devices) |
 | `GET/POST /api/device` (display name, visibility), `GET /api/nearby`, `POST /api/bluetooth/scan`, `POST /api/mesh/connect {deviceId}` | `DeviceApi` implemented by `MeshRuntime`; profile saved by `device.DeviceProfileStore` |
+| `/api/discovery`, `GET/POST /api/visibility`, `GET/POST /api/relay-storage` | `SetupAgent`: pre-membership discovery, hide/leave lifecycle and local storage policy |
 | `/api/setup/*` (Settings page) | `SetupAgent` |
 | `/api/membership`, `/api/membership/{scan,create,join,leave}` | `SetupAgent`, public LAN/Bluetooth directory, authenticated membership |
 | `/api/radio`, `/api/radio/{scan,connect,hotspot,stop}` | `NetworkManagerService` (local user + disconnection acknowledgement) |

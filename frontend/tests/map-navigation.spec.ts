@@ -19,14 +19,14 @@ test("devices remain clickable after panning, and dragging a device never opens 
   expect(after.y - before.y).toBeCloseTo(35, -1);
   await expect(page.getByText("NETWORK OVERVIEW", { exact: true })).toBeVisible();
   await maya.click();
-  await expect(page.locator(".network-inspector h2")).toHaveText("Maya");
+  await expect(page.locator(".network-inspector .mesh-identity h2")).toHaveText("Maya");
   await expect(maya).toHaveAttribute("aria-pressed", "true");
   await page.getByRole("button", { name: "Reset inspector" }).click();
   const tile = (await maya.locator(".device-tile").boundingBox())!;
   await drag(page, tile.x + tile.width / 2, tile.y + tile.height / 2, 45, 15);
   await expect(page.getByText("NETWORK OVERVIEW", { exact: true })).toBeVisible();
   await maya.click();
-  await expect(page.locator(".network-inspector h2")).toHaveText("Maya");
+  await expect(page.locator(".network-inspector .mesh-identity h2")).toHaveText("Maya");
 });
 
 test("wheel zoom stays anchored to the cursor, controls have limits and fit restores the map", async ({ page }) => {
@@ -72,7 +72,7 @@ test("keyboard navigation, Find me, search and blank-area deselection work toget
   expect(you.x + you.width / 2).toBeCloseTo(box.x + box.width / 2, 0);
   await page.getByRole("textbox", { name: "Find a device" }).fill("Ravi");
   await page.getByRole("group", { name: "Found devices" }).getByRole("button").click();
-  await expect(page.locator(".network-inspector h2")).toHaveText("Ravi");
+  await expect(page.locator(".network-inspector .mesh-identity h2")).toHaveText("Ravi");
   const ravi = (await page.getByRole("button", { name: "Inspect Ravi", exact: true }).boundingBox())!;
   expect(ravi.x + ravi.width / 2).toBeCloseTo(box.x + box.width / 2, 0);
   await canvas.focus();
@@ -91,7 +91,9 @@ test("touch drag and pinch navigate without selecting a device, and resize recov
   const context = await browser.newContext({ viewport: { width: 390, height: 844 }, hasTouch: true });
   const page = await context.newPage();
   await page.goto("/");
-  const canvas = map(page), box = (await canvas.boundingBox())!;
+  const canvas = map(page);
+  await canvas.scrollIntoViewIfNeeded();
+  const box = (await canvas.boundingBox())!;
   const client = await context.newCDPSession(page);
   const touch = (type: "touchStart" | "touchMove" | "touchEnd" | "touchCancel", points: { x: number; y: number; id: number }[]) => client.send("Input.dispatchTouchEvent", { type, touchPoints: points });
   const x = box.x + box.width / 2, y = box.y + 170;
@@ -106,7 +108,7 @@ test("touch drag and pinch navigate without selecting a device, and resize recov
   await expect(page.getByText("NETWORK OVERVIEW", { exact: true })).toBeVisible();
   await page.getByRole("button", { name: "Fit network", exact: true }).tap();
   await page.getByRole("button", { name: "Inspect You", exact: true }).tap();
-  await expect(page.locator(".network-inspector h2")).toHaveText("You");
+  await expect(page.locator(".network-inspector .mesh-identity h2")).toHaveText("You");
   await page.getByRole("button", { name: "Zoom in", exact: true }).tap();
   await page.setViewportSize({ width: 700, height: 900 });
   await expect(page.getByLabel("Map zoom", { exact: true })).toHaveText("100%");

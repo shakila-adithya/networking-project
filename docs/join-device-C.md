@@ -5,8 +5,8 @@ All members must run the updated backend with JDK 25. Build once with Maven in `
 ## Join from Network map
 
 1. Start the setup agent and open `http://localhost:6080` on the device being configured. Switch to Live.
-2. On the first device, select Create mesh, choose the local network (or the Bluetooth option when no LAN address exists), and enter a mesh ID and password. Creating/joining makes the device visible over Bluetooth; visibility remains adjustable on the map.
-3. On another device, select Scan meshes. LAN and Bluetooth names are unverified until password authentication succeeds. Select the desired mesh, its local network, enter the password, and select Authenticate and join. No per-member approval is required. Accept OS pairing prompts when required.
+2. Start by scanning for existing meshes. If none are found, or you want a separate group, on the first device select Create mesh, choose the local network (or the Bluetooth option when no LAN address exists), and enter a mesh ID and password. Creating/joining makes the device visible over Bluetooth; visibility remains adjustable on the map.
+3. On another device, select Scan meshes. LAN and Bluetooth names are unverified until password authentication succeeds. Select the desired mesh, choose a detected Wi-Fi/LAN or Bluetooth connection, enter its password, and select Authenticate and join. Wi-Fi/LAN joining also asks which local network to use. Bluetooth joining uses the selected Bluetooth advertisement without requiring a Wi-Fi selection. Extra IP addresses may still support other links in the same mixed-transport mesh; the map reports actual active transports. For another physical link, use Need another connection? to open Wi-Fi Direct or hotspot setup; establish that link first, refresh connections, then scan for the Relay mesh again. No per-member approval is required. Accept OS pairing prompts when required.
 4. Join authenticates the selected advertisement before saving settings. A wrong password leaves the previous saved membership intact. Watch the connection status after startup; CONNECTED requires an authenticated neighbour. A newly created isolated mesh can be running without any neighbours.
 5. Leave the current mesh before joining a different one. Leaving closes local mesh/file services and writes a marker preventing automatic rejoin. Received files, device identity and storage paths remain intact.
 
@@ -50,5 +50,22 @@ The agent preserves the existing managed peer ID and storage directory when swit
 Use localhost on the device you are managing. Device, membership, radio, mesh and file APIs reject foreign Hosts/Origins and non-loopback callers, including through the setup proxy. The setup page may be served on the LAN, but remote devices cannot use its proxy to read local files or change this laptop. The internal REST service binds loopback.
 
 Allow peer TCP, mesh TCP (peer port + 2000) and UDP discovery 45556 on the intended private subnet. Do not disable the firewall. Guest-network/client isolation, VLANs, VPNs and multicast restrictions can prevent discovery or paths. Configure static peers/connect by address when suitable; authenticated connections are still required. No route is possible across a physical partition.
+
+### Windows Firewall and connectivity checks
+
+Allow only the needed ports from the trusted private subnet. Run PowerShell as Administrator and replace the subnet and ports (peer port `5000` is an example; mesh TCP is peer port + 2000). Do not disable Windows Firewall and do not use `RemoteAddress Any`:
+
+```powershell
+New-NetFirewallRule -DisplayName "Relay peer TCP" -Direction Inbound -Protocol TCP -LocalPort 5000,7000 -RemoteAddress 192.168.1.0/24 -Action Allow -Profile Private
+New-NetFirewallRule -DisplayName "Relay discovery UDP" -Direction Inbound -Protocol UDP -LocalPort 45556 -RemoteAddress 192.168.1.0/24 -Action Allow -Profile Private
+```
+
+Set the Windows network profile to **Private**, then from the other device test reachability before joining:
+
+```powershell
+Test-NetConnection 192.168.1.10 -Port 5000
+```
+
+`TcpTestSucceeded` must be `True`. If not, check that both devices are on the same private network, the address belongs to the Wi-Fi adapter, the port is listening, and the firewall rule matches the subnet. Relay never changes firewall settings itself.
 
 Verification details and the untested Linux/Windows hardware combinations are recorded in [offline-mesh-status.md](offline-mesh-status.md). Tests using loopback or fake radios do not demonstrate physical interoperability.

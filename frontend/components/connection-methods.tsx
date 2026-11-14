@@ -2,7 +2,6 @@
 import { useEffect, useState } from "react";
 import { useMesh } from "@/lib/mesh";
 import { ConnectionGlyph, ConnectionMethod } from "./connection-glyph";
-import { NearbyPanel } from "./nearby";
 
 export type LocalNetwork = { address: string; label: string };
 export type RadioStatus = {
@@ -11,9 +10,10 @@ export type RadioStatus = {
   peers: { devicePath: string; address: string; name: string }[];
 };
 type Props = {
+  requestedMethod?: ConnectionMethod;
   radio: RadioStatus | null; radioError: string; networks: LocalNetwork[]; networksError: string;
   bluetoothAvailable?: boolean; bluetoothReason?: string; discoveryError?: string; scanning: boolean;
-  busy: boolean; checking: boolean; showPeers: boolean; reload: () => Promise<void>; scanBluetooth: () => Promise<void>;
+  busy: boolean; checking: boolean; reload: () => Promise<void>;
   perform: (path: string, body?: object) => Promise<boolean>;
 };
 const methods: { id: ConnectionMethod; label: string }[] = [
@@ -24,6 +24,7 @@ const methods: { id: ConnectionMethod; label: string }[] = [
 export function ConnectionMethods(props: Props) {
   const { preview, device, links, bluetooth } = useMesh();
   const [method, setMethod] = useState<ConnectionMethod>("bluetooth");
+  useEffect(() => { if (props.requestedMethod) setMethod(props.requestedMethod); }, [props.requestedMethod]);
   const [adapter, setAdapter] = useState("");
   const [ssid, setSsid] = useState("Relay offline");
   const [password, setPassword] = useState("");
@@ -62,7 +63,7 @@ export function ConnectionMethods(props: Props) {
   </label>;
   const nativeState = native?.state === "ACTIVE" ? "Running" : native?.state === "STARTING" ? "Starting…" : native?.state === "FAILED" || native?.state === "ERROR" ? "Needs attention" : "Stopped";
   return <section className="connection-methods" aria-label="Connection methods">
-    <div className="connection-section-heading"><div><h3>Connection methods</h3><p>Choose a way to link nearby devices.</p></div></div>
+    <div className="connection-section-heading"><div><h3>Connection setup</h3><p>Set up a link if the mesh is not reachable yet.</p></div></div>
     <div className="connection-tabs" role="tablist" aria-label="Connection method">
       {methods.map((item, index) => <button type="button" role="tab" tabIndex={method === item.id ? 0 : -1} onKeyDown={event => {
         const offset = ({ ArrowRight: 1, ArrowLeft: -1, ArrowDown: 2, ArrowUp: -2 } as Record<string, number>)[event.key];
@@ -76,10 +77,9 @@ export function ConnectionMethods(props: Props) {
     </div>
     <div id="connection-method-panel" className="connection-method-panel" role="tabpanel" tabIndex={0} aria-labelledby={`method-${method}`}>
       {method === "bluetooth" && <>
-        <div className="method-heading"><h4>Nearby Bluetooth devices</h4><span className="method-tag">{preview ? "Preview" : props.scanning ? "Scanning" : bluetoothAvailable ? "Ready" : bluetoothAvailable === false ? "Unavailable" : props.checking ? "Checking" : "Not reported"}</span></div>
-        <p className="method-help">Discover nearby Relay devices without a Wi-Fi network. A mesh password is still required to join.</p>
+        <div className="method-heading"><h4>Use Bluetooth</h4><span className="method-tag">{preview ? "Preview" : props.scanning ? "Scanning" : bluetoothAvailable ? "Ready" : bluetoothAvailable === false ? "Unavailable" : props.checking ? "Checking" : "Not reported"}</span></div>
+        <p className="method-help">Connect nearby devices without a Wi-Fi network. Find them with Scan nearby, then join their Relay mesh with its password.</p>
         {!preview && bluetoothReason && <p className="connection-note">{bluetoothReason}</p>}
-        {props.showPeers && <NearbyPanel method="bluetooth" embedded onScan={props.scanBluetooth} scanAvailable={preview || !!bluetoothAvailable} scanning={props.scanning} />}
       </>}
       {method === "lan" && <>
         <div className="method-heading"><h4>Wi-Fi or Ethernet</h4><button className="button" disabled={preview || props.busy} onClick={() => void props.reload()}>Refresh connections</button></div>
@@ -87,14 +87,13 @@ export function ConnectionMethods(props: Props) {
         <div className="local-network-list">{networks.map(network => <div className="local-network" key={network.address}><span className="network-address-mark" /><div><b>{network.label}</b><small>{network.address}</small></div></div>)}</div>
         {!networks.length && <p className="method-empty">No compatible local address detected. Connect Wi-Fi, Ethernet or a hotspot, then refresh.</p>}
         {!preview && (props.networksError || props.discoveryError) && <p className="connection-note">{props.networksError || props.discoveryError}<span>Bluetooth discovery is separate and may still be available.</span></p>}
-        {props.showPeers && <NearbyPanel method="lan" embedded />}
       </>}
       {method === "wifi-direct" && <>
         <div className="method-heading"><h4>Connect without a router</h4><span className="method-tag">{preview ? "Preview" : isOwn ? nativeState : directAvailable ? "Ready" : "Unavailable"}</span></div>
         <p className="method-help">Find a Wi-Fi Direct device, connect through the operating system, then scan for its Relay mesh. Accept system pairing prompts when requested.</p>
         {!preview && !directAvailable && <p className="connection-note">{nativeReason || "No Wi-Fi Direct adapter was reported by the operating system or driver."}</p>}
         {radioRunning && !isOwn && <p className="connection-note">{ownedMode || "A radio connection"} is already active. Stop it before starting Wi-Fi Direct.</p>}
-        <button className="button method-scan" disabled={preview || props.busy || !directAvailable} onClick={() => void props.perform("/radio/scan")}>Scan Wi-Fi Direct</button>
+        <p className="method-help">Select Scan nearby at the top to update this list alongside Bluetooth and local-network results.</p>
         {(preview || directAvailable) && <>
           {!native || !native.peers.length ? <p className="method-empty">{preview ? "Example view only. Switch to live to find Wi-Fi Direct devices." : "No Wi-Fi Direct devices found yet. Scan with the other device nearby."}</p> : <div className="direct-peer-list">{native.peers.map(peer => <div className="direct-peer" key={`${peer.devicePath}/${peer.address}`}><div><b>{peer.name}</b><small>Unverified device · {peer.address}</small></div><button className="button" disabled={!confirmed || !canConfigure || props.busy} onClick={() => void props.perform("/radio/connect", { devicePath: peer.devicePath, address: peer.address, confirmed })}>Connect device</button></div>)}</div>}
           {warning}

@@ -121,9 +121,23 @@ public final class MeshRuntime implements AutoCloseable, DeviceApi {
                 carriers.size() == 1 ? carriers.get(0) : new CompositeTransport(carriers),
                 security);
         // Hop count until measured link quality (RTT/loss/signal strength) is available per link.
-        router = new AodvRouter(LinkCost.HOP_COUNT, Duration.ofSeconds(2), 3, Duration.ofSeconds(60));
+        var measuredNode = new java.util.concurrent.atomic.AtomicReference<MeshNode>();
+        router = new AodvRouter(id -> measuredNode.get() == null ? 100 : measuredNode.get().routeCost(id), Duration.ofSeconds(2), 3, Duration.ofSeconds(60));
         node = new MeshNode(configuration.localPeerId(), transport, router);
-        chat = new ChatService(node, 4, Duration.ofSeconds(2));
+        measuredNode.set(node);
+        var graph = new storage.routing.MeshTopology(node);
+        storage.custody.EncryptedSpool chatHistory = null;
+        if (!Boolean.getBoolean("relay.storage.disabled")) {
+            try {
+                Path spoolPath = store.root().resolve("relay-custody").resolve(configuration.clusterId());
+                var key = storage.custody.OsStorageKey.open(store.root().resolve("relay-custody-key"));
+                chatHistory = new storage.custody.EncryptedSpool(store.root().resolve("chat-journal").resolve(configuration.clusterId()), key, 32L * 1024 * 1024);
+                var policy = storage.custody.StoragePolicy.load(profile.directory());
+                var spool = new storage.custody.EncryptedSpool(spoolPath, key, policy.quotaBytes());
+                new storage.custody.CustodyService(node, spool, Duration.ofHours(policy.retentionHours()), graph::nextHop);
+            } catch (IOException e) { node.storageUnavailable(e.getMessage()); System.err.println("Persistent forwarding unavailable: " + e.getMessage()); }
+        } else node.storageUnavailable("Persistent forwarding disabled for this run.");
+        chat = new ChatService(node, 4, Duration.ofSeconds(2), chatHistory);
         // Tuning for slow radios and for testing: -Dmesh.chunkIntervalMillis=<pause between chunks>,
         // -Dmesh.stallSeconds=<give up (resumable) after this long without any acknowledgement>.
         TransferConfig defaults = TransferConfig.defaults();
@@ -268,6 +282,7 @@ public final class MeshRuntime implements AutoCloseable, DeviceApi {
             bluetooth.put("advertising", bluetoothAdapter.isAdvertising());
             bluetooth.put("advertisedAs", bluetoothAdapter.name());
             bluetooth.put("error", advertiseError);
+            bluetooth.put("reason", bluetoothAdapter.discoveryLimitation());
         } else {
             bluetooth.put("reason", bluetoothUnavailableReason.isEmpty()
                     ? "Bluetooth is turned off for this run (mesh.transport=tcp)" : bluetoothUnavailableReason);

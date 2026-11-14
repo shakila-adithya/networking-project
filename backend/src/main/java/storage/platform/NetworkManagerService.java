@@ -115,9 +115,27 @@ public final class NetworkManagerService implements AutoCloseable {
     public synchronized void scan() throws IOException {
         requireAvailable();
         try {
-            for (Adapter adapter : adapters()) if (adapter.type().equals("wifi-direct"))
-                remote(adapter.path(), WifiP2P.class).StartFind(Map.of("timeout", new Variant<>(new org.freedesktop.dbus.types.UInt32(15))));
-        } catch (Exception e) { throw failure("Wi-Fi Direct scan failed. Check radio state, driver support and NetworkManager permissions.", e); }
+            boolean found = false;
+            for (Adapter adapter : adapters()) if (adapter.type().equals("wifi-direct")) {
+                found = true;
+                startFind(remote(adapter.path(), WifiP2P.class));
+            }
+            if (!found) throw new IOException("No Wi-Fi Direct adapter was reported by NetworkManager.");
+            operationError = "";
+        } catch (Exception e) { throw failure("Wi-Fi Direct scan failed: " + scanFailureReason(e), e); }
+    }
+    /** NetworkManager's StartFind contract requires a signed int32 variant ('i'), not UInt32 ('u'). */
+    static void startFind(WifiP2P radio) {
+        radio.StartFind(Map.of("timeout", new Variant<>(15)));
+    }
+    /** Preserve the OS explanation instead of blaming hardware or permissions for every failure. */
+    static String scanFailureReason(Exception failure) {
+        Throwable root = failure;
+        for (int depth = 0; root.getCause() != null && root.getCause() != root && depth < 8; depth++) root = root.getCause();
+        String detail = root.getMessage();
+        if (detail == null || detail.isBlank()) return "NetworkManager did not provide a reason. Check the Wi-Fi radio and local scan permissions.";
+        detail = detail.replaceAll("[\\p{Cntrl}]", " ").strip();
+        return detail.length() > 300 ? detail.substring(0, 300) : detail;
     }
     public synchronized void startHotspot(String devicePath, String ssid, String password, boolean confirmed) throws IOException {
         requireConfirmed(confirmed); requireAvailable();

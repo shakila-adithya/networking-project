@@ -16,6 +16,8 @@ public final class DeviceProfileService {
         this.current = store.load();
     }
 
+    public java.nio.file.Path directory() { return store.file().toAbsolutePath().getParent(); }
+
     public synchronized DeviceProfile profile() {
         return current;
     }

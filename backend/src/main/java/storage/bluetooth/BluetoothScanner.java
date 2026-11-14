@@ -93,7 +93,7 @@ public final class BluetoothScanner implements AutoCloseable {
                 device.relayDeviceId()
                         .filter(id -> !id.equals(localDeviceId))
                         .ifPresent(id -> topology.offer(new Candidate(id,
-                                BluetoothAddress.withPrefix(device.address()), device.signal())));
+                                BluetoothAddress.withPrefix(device.address()), device.signal(), device.rssi() != null)));
             }
         } catch (IOException | RuntimeException e) {
             lastError = String.valueOf(e.getMessage());

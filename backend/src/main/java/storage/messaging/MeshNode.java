@@ -28,10 +28,37 @@ public final class MeshNode implements AutoCloseable {
     private final Forwarder forwarder;
     private final DuplicateCache seen = new DuplicateCache(4096);
     private final Map<String, NeighbourLink> neighbours = new ConcurrentHashMap<>();
+    // One logical neighbour may have independently authenticated carriers. Healthy fallbacks stay open.
+    private final Map<String, Map<String, NeighbourLink>> carriers = new HashMap<>();
+    private final Object carrierLock = new Object();
+    private final Map<Link, Double> roundTrips = new ConcurrentHashMap<>();
+    private final Map<Link, Double> reliability = new ConcurrentHashMap<>();
+    private final Map<Link, Double> throughput = new ConcurrentHashMap<>();
+    private final Map<String, Integer> measuredSignal = new ConcurrentHashMap<>();
+    public void signalHint(String peer, String address, int signal) { measuredSignal.put(peer + "/" + (address.startsWith("bt:") ? "bluetooth" : "tcp"), signal); }
+    private final Map<Link, Long> sentBytes = new ConcurrentHashMap<>();
     private final Map<MessageType, Consumer<Message>> handlers = new ConcurrentHashMap<>();
     private final List<Consumer<String>> upListeners = new CopyOnWriteArrayList<>();
     private final List<Consumer<String>> downListeners = new CopyOnWriteArrayList<>();
     private volatile boolean running;
+    private final Map<String, Boolean> custodyPeers = new ConcurrentHashMap<>();
+    public Set<String> custodyNeighbourIds() { Set<String> ids = neighbourIds(); ids.removeIf(id -> !Boolean.TRUE.equals(custodyPeers.get(id))); return ids; }
+    private storage.custody.CustodyService custody;
+    private storage.routing.MeshTopology topologyView;
+    private String storageUnavailable = "Secure persistent forwarding is not configured.";
+    public void attachTopology(storage.routing.MeshTopology topology) { topologyView = topology; }
+    public void attachCustody(storage.custody.CustodyService service) { custody = service; }
+    public void storageUnavailable(String reason) { storageUnavailable = reason; }
+    public boolean durable() { return custody != null; }
+    public storage.custody.CustodyService custody() { return custody; }
+    public Map<String, Object> custodyStatus() { return custody == null ? Map.of("available", false, "error", storageUnavailable) : custody.status(); }
+    public java.util.List<Map<String, Object>> topologyStatus() { return topologyView == null ? java.util.List.of() : topologyView.snapshot(); }
+    public boolean deliverStored(Message message) {
+        Consumer<Message> handler = handlers.get(message.type());
+        if (handler == null) return false;
+        try { handler.accept(message); return true; }
+        catch (RuntimeException e) { System.err.println("Stored delivery paused: " + e.getMessage()); return false; }
+    }
     private volatile String displayName = "";
     private static final int MAX_NAME_BYTES = 96;
     private static final int MAX_KNOWN_NAMES = 512;
@@ -212,6 +239,7 @@ public final class MeshNode implements AutoCloseable {
 
     /** Sends a new message from this device. Returns the number of neighbours it was handed to. */
     public int originate(Message message) {
+        if (custody != null && storage.custody.CustodyService.handles(message)) return custody.originate(message);
         seen.firstSeen(message.id());
         return sendToHops(message, null);
     }
@@ -238,52 +266,153 @@ public final class MeshNode implements AutoCloseable {
 
     void sendHello(Link link) throws IOException {
         link.send(MessageCodec.encode(Message.create(localId, Message.BROADCAST, MessageType.HELLO,
-                encodeName(displayName))));
+                helloPayload())));
     }
 
-    /** Registers a handshaken link. Returns false if the link lost to an existing one and must be closed. */
+    private static int carrierCost(String kind) {
+        return switch (kind) { case "tcp", "lan", "wifi-direct", "hotspot" -> 100; case "bluetooth" -> 300; default -> 200; };
+    }
+    private int measuredCost(String peer, NeighbourLink n) {
+        int score = carrierCost(n.link().kind());
+        score += (int)Math.min(150, roundTrips.getOrDefault(n.link(), 0.0) / 5);
+        score += (int)(120 * (1 - reliability.getOrDefault(n.link(), 1.0)));
+        Double rate = throughput.get(n.link());
+        if (rate != null) score += (int)(80 / (1 + rate / 1_000_000));
+        Integer signal = measuredSignal.get(peer + "/" + n.link().kind());
+        if (signal != null) score += (100 - signal) / 2;
+        var power = storage.platform.PowerState.current();
+        if (power.percent() != null && power.percent() < 20 && !Boolean.TRUE.equals(power.pluggedIn())) score += n.link().kind().equals("bluetooth") ? 40 : 20;
+        return score;
+    }
+    public int routeCost(String peer) {
+        NeighbourLink link = neighbours.get(peer);
+        return link == null ? 1000 : measuredCost(peer, link);
+    }
+    public boolean hasCarrier(String peer, String kind) {
+        synchronized (carrierLock) { return carriers.getOrDefault(peer, Map.of()).values().stream()
+                .anyMatch(n -> n.link().isOpen() && (kind.equals(n.link().kind())
+                        || kind.equals("tcp") && Set.of("lan", "wifi-direct", "hotspot").contains(n.link().kind()))); }
+    }
+    public List<Map<String, Object>> carrierStatus() {
+        synchronized (carrierLock) {
+            List<Map<String, Object>> result = new java.util.ArrayList<>();
+            carriers.forEach((peer, links) -> links.values().forEach(n -> {
+                Map<String, Object> item = new java.util.LinkedHashMap<>();
+                item.put("peerId", peer); item.put("kind", n.link().kind()); item.put("address", n.link().remoteAddress());
+                item.put("active", neighbours.get(peer) == n); item.put("open", n.link().isOpen());
+                item.put("rttMillis", roundTrips.get(n.link())); item.put("bytesSent", sentBytes.getOrDefault(n.link(), 0L));
+                item.put("sendRateEstimateBytesPerSecond", throughput.get(n.link())); item.put("reliability", reliability.get(n.link()));
+                item.put("signal", measuredSignal.get(peer + "/" + n.link().kind())); item.put("cost", measuredCost(peer, n));
+                item.put("battery", storage.platform.PowerState.current());
+                result.add(item);
+            }));
+            return result;
+        }
+    }
+    private byte[] helloPayload() {
+        byte[] name = encodeName(displayName);
+        byte[] hello = new byte[name.length + 6];
+        System.arraycopy(new byte[]{82,76,89,51,0}, 0, hello, 0, 5); hello[5] = (byte)(custody == null ? 0 : 1); System.arraycopy(name, 0, hello, 6, name.length); return hello;
+    }
+    String helloName(String peer, byte[] payload) throws IOException {
+        boolean current = payload.length >= 6 && (payload[5] == 0 || payload[5] == 1) && payload[0] == 82 && payload[1] == 76 && payload[2] == 89 && payload[3] == 51 && payload[4] == 0;
+        if (!current && custody != null) throw new IOException("This peer needs an update. Install the current Relay version on both devices for durable forwarding.");
+        custodyPeers.put(peer, current && payload[5] == 1);
+        return decodeName(current ? Arrays.copyOfRange(payload, 6, payload.length) : payload);
+    }
+    /** Retain healthy carriers of different transports; tie-break duplicates of the same transport only. */
     boolean register(String remoteId, Link link, boolean initiatedLocally, String remoteName) {
-        if (!running || remoteId.equals(localId)) {
-            return false;
-        }
+        if (!running || remoteId.equals(localId)) return false;
         String initiator = initiatedLocally ? localId : remoteId;
-        boolean[] accepted = {false};
-        Link[] replaced = {null};
-        neighbours.compute(remoteId, (id, existing) -> {
-            if (existing == null && neighbours.size() >= 64) return null;
-            if (existing == null || !existing.link().isOpen()) {
-                accepted[0] = true;
-                return new NeighbourLink(link, initiator);
+        Link replaced = null;
+        boolean first;
+        synchronized (carrierLock) {
+            Map<String, NeighbourLink> links = carriers.get(remoteId);
+            if (links == null) {
+                if (carriers.size() >= 64) return false;
+                links = new HashMap<>(); carriers.put(remoteId, links);
             }
-            // Simultaneous connect: both ends keep the link started by the smaller id.
-            if (initiator.compareTo(existing.initiator()) < 0) {
-                accepted[0] = true;
-                replaced[0] = existing.link();
-                return new NeighbourLink(link, initiator);
+            NeighbourLink existing = links.get(link.kind());
+            if (existing != null && existing.link().isOpen()) {
+                if (initiator.compareTo(existing.initiator()) >= 0) return false;
+                replaced = existing.link();
             }
-            return existing;
-        });
-        if (replaced[0] != null) {
-            replaced[0].close();
+            if (existing == null && links.size() >= 4) return false;
+            first = !neighbours.containsKey(remoteId);
+            links.put(link.kind(), new NeighbourLink(link, initiator));
+            selectCarrier(remoteId, links);
         }
-        if (accepted[0]) {
-            learnName(remoteId, remoteName);
+        if (replaced != null) replaced.close();
+        learnName(remoteId, remoteName);
+        if (first) {
             upListeners.forEach(listener -> listener.accept(remoteId));
             forwarder.neighbourChanged(remoteId, true);
-            syncNamesTo(remoteId);
-            announcePresence(); // devices beyond us learn our name; the new neighbour already has it from HELLO
+            syncNamesTo(remoteId); announcePresence();
         }
-        return accepted[0];
+        return true;
     }
-
+    private final Map<String, String> improvement = new HashMap<>();
+    private final Map<String, Long> improvementSince = new HashMap<>();
+    private void selectCarrier(String peer, Map<String, NeighbourLink> links) {
+        NeighbourLink best = links.values().stream().filter(n -> n.link().isOpen())
+                .min(java.util.Comparator.comparingInt(n -> measuredCost(peer, n))).orElse(null);
+        NeighbourLink current = neighbours.get(peer);
+        if (current == null || !current.link().isOpen()) { if (best == null) neighbours.remove(peer); else neighbours.put(peer, best); improvement.remove(peer); improvementSince.remove(peer); return; }
+        if (best != current && best != null && measuredCost(peer, best) <= .8 * measuredCost(peer, current)) {
+            String key = best.link().kind();
+            if (!key.equals(improvement.get(peer))) { improvement.put(peer, key); improvementSince.put(peer, System.nanoTime()); }
+            if (System.nanoTime() - improvementSince.get(peer) >= java.time.Duration.ofSeconds(10).toNanos()) neighbours.put(peer, best);
+        } else { improvement.remove(peer); improvementSince.remove(peer); }
+    }
     void unregister(String remoteId, Link link) {
-        NeighbourLink current = neighbours.get(remoteId);
-        if (current != null && current.link() == link && neighbours.remove(remoteId, current)) {
+        boolean gone;
+        synchronized (carrierLock) {
+            Map<String, NeighbourLink> links = carriers.get(remoteId);
+            if (links == null) return;
+            NeighbourLink record = links.get(link.kind());
+            if (record == null || record.link() != link) return;
+            links.remove(link.kind()); roundTrips.remove(link); sentBytes.remove(link); reliability.remove(link); throughput.remove(link);
+            selectCarrier(remoteId, links);
+            gone = !neighbours.containsKey(remoteId);
+            if (links.isEmpty()) carriers.remove(remoteId);
+        }
+        if (gone) {
+            custodyPeers.remove(remoteId);
             downListeners.forEach(listener -> listener.accept(remoteId));
             forwarder.neighbourChanged(remoteId, false);
         }
     }
-
+    void receive(Message message, String fromNeighbour, Link receivedOn) {
+        synchronized (carrierLock) {
+            carriers.getOrDefault(fromNeighbour, Map.of()).values().stream().filter(n -> n.link() == receivedOn)
+                    .forEach(n -> n.lastHeard().set(System.nanoTime()));
+        }
+        if (message.type() == MessageType.LINK_PING || message.type() == MessageType.LINK_PONG) {
+            if (!message.source().equals(fromNeighbour) || !message.destination().equals(localId) || message.ttl() != 1) return;
+            if (message.type() == MessageType.LINK_PING) {
+                writeCarrier(receivedOn, new Message(UUID.randomUUID(), localId, fromNeighbour, MessageType.LINK_PONG,
+                        1, System.currentTimeMillis(), message.payload()));
+            } else if (message.payload().length == 8) {
+                long started = java.nio.ByteBuffer.wrap(message.payload()).getLong();
+                double elapsed = (System.nanoTime() - started) / 1_000_000.0;
+                if (elapsed >= 0 && elapsed < 60000) roundTrips.compute(receivedOn, (k, old) -> old == null ? elapsed : old * .8 + elapsed * .2);
+            }
+            return;
+        }
+        receive(message, fromNeighbour);
+    }
+    boolean writeCarrier(Link link, Message message) {
+        try {
+            byte[] bytes = MessageCodec.encode(message); long started = System.nanoTime(); link.send(bytes);
+            sentBytes.merge(link, (long)bytes.length, Long::sum);
+            reliability.compute(link, (k, old) -> old == null ? 1 : .98 * old + .02);
+            if (bytes.length >= 1024) {
+                double rate = bytes.length * 1_000_000_000.0 / Math.max(1, System.nanoTime() - started);
+                throughput.compute(link, (k, old) -> old == null ? rate : old * .8 + rate * .2);
+            }
+            return true;
+        } catch (IOException e) { reliability.compute(link, (k, old) -> old == null ? 0 : old * .5); link.close(); return false; }
+    }
     void receive(Message message, String fromNeighbour) {
         NeighbourLink sender = neighbours.get(fromNeighbour);
         if (sender != null) sender.lastHeard().set(System.nanoTime());
@@ -296,6 +425,10 @@ public final class MeshNode implements AutoCloseable {
             return; // link health frames never leave their direct link
         }
         if (message.type() == MessageType.HELLO) {
+            return;
+        }
+        if (message.type() == MessageType.CUSTODY_DATA || message.type() == MessageType.CUSTODY_ACK) {
+            if (custody != null) custody.receive(message, fromNeighbour);
             return;
         }
         if (forwarder.handleControl(message, fromNeighbour)) {
@@ -326,38 +459,15 @@ public final class MeshNode implements AutoCloseable {
         if (neighbour == null) {
             return false;
         }
-        try {
-            neighbour.link().send(MessageCodec.encode(message));
-            return true;
-        } catch (IOException e) {
-            System.err.println("Send to " + neighbourId + " failed: " + e.getMessage());
-            neighbour.link().close(); // its reader sees EOF and removes the neighbour
-            return false;
-        }
+        if (writeCarrier(neighbour.link(), message)) return true;
+        unregister(neighbourId, neighbour.link());
+        NeighbourLink fallback = neighbours.get(neighbourId);
+        return fallback != null && writeCarrier(fallback.link(), message);
     }
 
     private int sendToHops(Message message, String fromNeighbour) {
-        byte[] frame;
-        try {
-            frame = MessageCodec.encode(message);
-        } catch (IOException e) {
-            System.err.println("Could not encode message: " + e.getMessage());
-            return 0;
-        }
         int sent = 0;
-        for (String hop : forwarder.nextHops(message, fromNeighbour, neighbourIds())) {
-            NeighbourLink neighbour = neighbours.get(hop);
-            if (neighbour == null) {
-                continue;
-            }
-            try {
-                neighbour.link().send(frame);
-                sent++;
-            } catch (IOException e) {
-                System.err.println("Send to " + hop + " failed: " + e.getMessage());
-                neighbour.link().close(); // its reader sees EOF and removes the neighbour
-            }
-        }
+        for (String hop : forwarder.nextHops(message, fromNeighbour, neighbourIds())) if (sendTo(hop, message)) sent++;
         return sent;
     }
 
@@ -365,7 +475,10 @@ public final class MeshNode implements AutoCloseable {
     void checkLinkHealth() {
         if (!running) return;
         long now = System.nanoTime();
-        neighbours.forEach((id, neighbour) -> {
+        List<Map.Entry<String, NeighbourLink>> snapshot = new java.util.ArrayList<>();
+        synchronized (carrierLock) { carriers.forEach((id, links) -> { selectCarrier(id, links); links.values().forEach(n -> snapshot.add(Map.entry(id, n))); }); }
+        snapshot.forEach(item -> {
+            String id = item.getKey(); NeighbourLink neighbour = item.getValue();
             if (now - neighbour.lastHeard().get() > silenceTimeoutNanos) {
                 neighbour.link().close(); unregister(id, neighbour.link());
             } else if (healthPending.add(neighbour.link())) {
@@ -378,10 +491,13 @@ public final class MeshNode implements AutoCloseable {
     @Override
     public void close() {
         running = false;
+        if (custody != null) custody.close();
+        if (topologyView != null) topologyView.close();
         healthTimer.shutdownNow();
         healthWriters.shutdownNow();
-        for (NeighbourLink neighbour : neighbours.values()) {
-            neighbour.link().close();
+        synchronized (carrierLock) {
+            carriers.values().forEach(links -> links.values().forEach(n -> n.link().close()));
+            carriers.clear(); neighbours.clear();
         }
         transport.close();
         forwarder.close();

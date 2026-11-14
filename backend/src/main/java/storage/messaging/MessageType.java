@@ -28,5 +28,8 @@ public enum MessageType {
     PRESENCE,
     /** Authenticated neighbour keepalive. Never routed or delivered to applications. */
     LINK_PING,
-    LINK_PONG
+    LINK_PONG,
+    TOPOLOGY,
+    CUSTODY_DATA,
+    CUSTODY_ACK
 }

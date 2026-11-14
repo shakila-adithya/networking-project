@@ -6,7 +6,7 @@ import { Avatar, Eyebrow } from "./ui";
 
 const MAX_NAME = 32;
 
-// "My device": the name other people see. Visibility is changed on the Network map (select your own device).
+// "My device": the name other people see. Visibility is controlled above the Network map.
 export function MyDevice({ embedded = false }: { embedded?: boolean }) {
   const { preview, device, saveDevice } = useMesh();
   const [localName, setLocalName] = useState<{ deviceId: string; customName: string } | null>(null);
@@ -113,7 +113,7 @@ export function MyDevice({ embedded = false }: { embedded?: boolean }) {
         {!preview && !profile && nameLoadError && <p role="alert" className="field-error">{nameLoadError}</p>}
       </form>
       <p className="hint">
-        To let nearby devices find you, open the <Link href="/">Network map</Link> and select your device.
+        To let nearby devices find you, open the <Link href="/">Network map</Link> and use the visibility switch in the Your device card.
       </p>
     </section>
   );

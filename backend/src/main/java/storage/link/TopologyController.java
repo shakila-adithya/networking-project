@@ -42,7 +42,9 @@ public final class TopologyController implements AutoCloseable {
         long pendingUntil;
         String lastError = "";
 
-        Entry(Candidate candidate, long expiresAt) {
+        final long firstSeen;
+        Entry(Candidate candidate, long expiresAt, long firstSeen) {
+            this.firstSeen = firstSeen;
             this.candidate = candidate;
             this.expiresAt = expiresAt;
         }
@@ -93,11 +95,12 @@ public final class TopologyController implements AutoCloseable {
         }
         Entry entry = candidates.get(key(candidate));
         if (entry == null) {
-            candidates.put(key(candidate), new Entry(candidate, expiresAt));
+            candidates.put(key(candidate), new Entry(candidate, expiresAt, clock.getAsLong()));
         } else {
             entry.candidate = candidate;
             entry.expiresAt = Math.max(entry.expiresAt == PERMANENT ? PERMANENT : expiresAt, entry.expiresAt);
         }
+        if (candidate.signalMeasured()) node.signalHint(candidate.deviceId(), candidate.address(), candidate.signal());
         wake();
     }
 
@@ -243,13 +246,15 @@ public final class TopologyController implements AutoCloseable {
             }
         }
         int inFlight = pendingPeers.size();
+        List<Candidate> upgrades = new ArrayList<>();
         List<Candidate> bridges = new ArrayList<>();
         List<Candidate> redundant = new ArrayList<>();
         for (Entry entry : candidates.values()) {
             String id = entry.candidate.deviceId();
             if (neighbours.contains(id)) {
-                entry.failures = 0;
-                entry.lastError = "";
+                if (entry.nextAttemptAt <= now && !entry.candidate.address().startsWith("bt:") && entry.candidate.address().matches(".*:[0-9]+$")
+                        && !node.hasCarrier(id, "tcp") && node.routeCost(id) >= 175 && now - entry.firstSeen >= 10000)
+                    upgrades.add(entry.candidate);
                 continue;
             }
             if (entry.nextAttemptAt > now || pendingPeers.contains(id)) {
@@ -257,7 +262,8 @@ public final class TopologyController implements AutoCloseable {
             }
             (known.contains(id) ? redundant : bridges).add(entry.candidate);
         }
-        Comparator<Candidate> strongestFirst = Comparator.comparingInt(Candidate::signal).reversed()
+        Comparator<Candidate> strongestFirst = Comparator.comparingInt((Candidate c) -> c.address().startsWith("bt:") ? 1 : 0)
+                .thenComparing(Comparator.comparingInt(Candidate::signal).reversed())
                 .thenComparing(Candidate::deviceId).thenComparing(Candidate::address);
         bridges.sort(strongestFirst);
         redundant.sort(strongestFirst);
@@ -280,6 +286,9 @@ public final class TopologyController implements AutoCloseable {
                 chosen.add(candidate);
                 chosenPeers.add(candidate.deviceId());
             }
+        }
+        for (Candidate upgrade : upgrades) {
+            if (chosenPeers.add(upgrade.deviceId())) chosen.add(upgrade);
         }
         return chosen;
     }

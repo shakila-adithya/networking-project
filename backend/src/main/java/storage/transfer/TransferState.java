@@ -9,5 +9,7 @@ public enum TransferState {
     /** The receiver confirmed the SHA-256 and stored the file. */
     DELIVERED,
     /** Rejected, or nothing was acknowledged for the stall timeout. A failed transfer can be resumed. */
-    FAILED
+    FAILED,
+    /** Pending bytes are retained; forwarding resumes when contact becomes available. */
+    WAITING
 }

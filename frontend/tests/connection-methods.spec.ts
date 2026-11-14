@@ -33,19 +33,20 @@ async function connectionFixture(page: Page, options: Options = {}) {
   return posts;
 }
 
-test("separates connection methods and keeps LAN warnings out of Bluetooth", async ({ page }) => {
+test("shows combined nearby results while keeping connection settings separate", async ({ page }) => {
   await connectionFixture(page, { noLan: true });
   await page.goto("/");
   const methods = page.getByRole("region", { name: "Connection methods" });
   await expect(methods.getByRole("tab")).toHaveCount(4);
-  await expect(methods.getByRole("tabpanel")).toContainText("Bluetooth laptop");
-  await expect(methods.getByRole("tabpanel")).not.toContainText("LAN desktop");
+  const nearby = page.getByRole("region", { name: "Nearby devices", exact: true });
+  await expect(nearby).toContainText("Bluetooth laptop");
+  await expect(nearby).toContainText("LAN desktop");
   await expect(page.getByText(/No multicast-capable/)).toHaveCount(0);
   await methods.getByRole("tab", { name: /Wi-Fi \/ LAN/ }).click();
   await expect(methods.getByRole("tabpanel")).toContainText("No multicast-capable");
   await expect(methods.getByRole("tabpanel")).toContainText("Bluetooth discovery is separate");
-  await expect(methods.getByRole("tabpanel")).toContainText("LAN desktop");
-  await expect(methods.getByRole("tabpanel")).not.toContainText("Bluetooth laptop");
+  await expect(nearby).toContainText("LAN desktop");
+  await expect(nearby).toContainText("Bluetooth laptop");
 });
 
 test("reports active transports separately from available adapters", async ({ page }) => {
@@ -66,11 +67,12 @@ test("Wi-Fi Direct uses its own scan and requires acknowledgement to connect", a
   await page.goto("/");
   const methods = page.getByRole("region", { name: "Connection methods" });
   await methods.getByRole("tab", { name: /^Wi-Fi Direct/ }).click();
-  await methods.getByRole("button", { name: "Scan Wi-Fi Direct", exact: true }).click();
+  await page.getByRole("button", { name: "Scan nearby", exact: true }).click();
   await expect(methods.getByRole("button", { name: "Connect device", exact: true })).toBeDisabled();
   await methods.getByRole("checkbox").check();
   await methods.getByRole("button", { name: "Connect device", exact: true }).click();
   expect(posts).toEqual([
+    { path: "/api/membership/scan", body: {} },
     { path: "/api/radio/scan", body: {} },
     { path: "/api/radio/connect", body: { devicePath: "/p2p/1", address: "AA:BB:CC:DD:EE:02", confirmed: true } },
   ]);
@@ -81,7 +83,8 @@ test("unavailable methods explain platform limitations without offering a hotspo
   await page.goto("/");
   const methods = page.getByRole("region", { name: "Connection methods" });
   await expect(methods.getByRole("tabpanel")).toContainText("Bluetooth adapter is powered off");
-  await expect(methods.getByRole("button", { name: "Scan Bluetooth" })).toBeDisabled();
+  await expect(page.getByRole("button", { name: "Scan nearby", exact: true })).toBeEnabled();
+  await expect(methods.getByRole("button", { name: "Scan Bluetooth" })).toHaveCount(0);
   await methods.getByRole("tab", { name: /^Hotspot/ }).click();
   await expect(methods.getByRole("tabpanel")).toContainText("Native network service is unavailable on this platform");
   await expect(methods.getByLabel("Hotspot password", { exact: true })).toHaveCount(0);
@@ -119,8 +122,8 @@ test("a discovered mesh groups its transports and joins the explicitly selected 
   await page.goto("/");
   await expect(page.getByRole("button", { name: "Join mesh Community" })).toHaveCount(1);
   await page.getByRole("button", { name: "Join mesh Community" }).click();
-  await page.getByLabel("Mesh connection", { exact: true }).selectOption("A/bt:AA:BB:CC:DD:EE:01");
-  await page.getByLabel("Mesh local network", { exact: true }).selectOption("192.168.20.3");
+  await page.getByRole("button", { name: /Bluetooth Found this mesh/ }).click();
+  await expect(page.getByLabel("Mesh local network", { exact: true })).toHaveCount(0);
   await page.getByLabel("Mesh password", { exact: true }).fill("mesh-only-candidate-password");
   await page.getByRole("button", { name: "Authenticate and join" }).click();
   expect(posts).toContainEqual({ path: "/api/membership/join", body: {
@@ -150,4 +153,32 @@ test("local connections are refreshed manually rather than on the map polling ti
   await expect(methods.getByRole("tabpanel")).toContainText("10.0.0.5");
   expect(checks).toBeGreaterThan(before);
   expect(posts).toEqual([]);
+});
+
+test("one top scan checks local network, Bluetooth and supported Wi-Fi Direct without changing connections", async ({ page }) => {
+  const posts = await connectionFixture(page);
+  let networkReads = 0;
+  page.on("request", request => { if (new URL(request.url()).pathname === "/api/setup/networks") networkReads++; });
+  await page.goto("/");
+  await expect.poll(() => networkReads).toBeGreaterThan(0);
+  const previousReads = networkReads;
+  const sidebar = page.locator(".network-inspector");
+  await expect(sidebar.locator(".map-visibility")).toHaveCount(1);
+  await expect(page.locator(".map-heading .map-visibility")).toHaveCount(0);
+  await sidebar.getByRole("button", { name: "Scan nearby", exact: true }).click();
+  await expect.poll(() => posts.length).toBe(2);
+  expect(posts.map(post => post.path)).toEqual(["/api/membership/scan", "/api/radio/scan"]);
+  await expect.poll(() => networkReads).toBeGreaterThan(previousReads);
+  const scan = await sidebar.locator(".nearby-scan-card").boundingBox();
+  const device = await sidebar.locator(".map-visibility").boundingBox();
+  expect(scan!.y).toBeLessThan(device!.y);
+});
+
+test("nearby scan still searches the LAN when Bluetooth and native radio support are unavailable", async ({ page }) => {
+  const posts = await connectionFixture(page, { bluetooth: false, nativeAvailable: false });
+  await page.goto("/");
+  await page.getByRole("button", { name: "Scan nearby", exact: true }).click();
+  await expect.poll(() => posts.length).toBe(1);
+  expect(posts).toEqual([{ path: "/api/membership/scan", body: {} }]);
+  await expect(page.getByText("Search started. Nearby devices and meshes appear on the map as they are found.")).toBeVisible();
 });

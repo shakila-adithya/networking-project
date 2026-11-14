@@ -2248,3 +2248,93 @@ hr {
 .settings-network .settings-card-head p { max-width: 620px; margin: 6px 0 0; }
 .settings-network .settings-card-head > .button { flex-shrink: 0; }
 .settings-network-form { margin-top: 22px; }
+
+.mesh-create-choice { padding: 14px; margin-top: 14px; border: 1px dashed var(--line); border-radius: 11px; }
+.mesh-create-choice p { margin: 0 0 12px; font-size: 11px; line-height: 1.7; }
+.mesh-create-choice.has-meshes { border: 0; padding: 0; }
+.mesh-create-choice.has-meshes .button { font-size: 11px; }
+.mesh-join-methods { display: grid; gap: 8px; border: 0; padding: 0; margin: 0; min-width: 0; }
+.mesh-join-methods legend { font-size: 12px; font-weight: 600; padding: 0 0 10px; }
+.mesh-join-method { display: flex; align-items: center; gap: 12px; width: 100%; min-height: 64px; padding: 12px; border: 1px solid var(--line); border-radius: 11px; background: var(--bg); text-align: left; }
+.mesh-join-method .connection-glyph { width: 22px; height: 22px; flex-shrink: 0; }
+.mesh-join-method b { font-size: 12px; display: block; }
+.mesh-join-method small { display: block; font-size: 10px; line-height: 1.6; margin-top: 4px; color: var(--muted); }
+.mesh-join-method[aria-pressed="true"] { color: var(--gold); border-color: var(--gold); background: #ffc7650a; }
+.mesh-other-connections { border: 1px solid var(--line); border-radius: 10px; padding: 12px; }
+.mesh-other-connections summary { cursor: pointer; font-size: 11px; font-weight: 600; }
+.mesh-other-connections > p { margin-top: 10px; }
+.mesh-other-connections .connection-actions { margin-top: 12px; }
+.mesh-connection-setup { scroll-margin-top: 24px; }
+
+.map-visibility { pointer-events: auto; max-width: 620px; margin-top: 22px; padding: 20px; background: var(--panel); border: 1px solid var(--line); border-radius: 16px; }
+.map-device-header { display: flex; align-items: center; gap: 13px; }
+.map-device-icon { display: grid; place-items: center; width: 46px; height: 46px; flex-shrink: 0; color: var(--gold); background: #ffc76512; border: 1px solid #ffc76530; border-radius: 13px; }
+.map-device-identity { flex: 1; min-width: 0; }
+.map-device-eyebrow { display: block; color: var(--muted); font-size: 9px; font-weight: 700; letter-spacing: 1.4px; }
+.map-device-identity h2 { margin: 5px 0; font-size: 17px; line-height: 1.35; overflow-wrap: anywhere; }
+.map-device-id { display: block; color: var(--muted); font-size: 10px; overflow-wrap: anywhere; }
+.map-device-id code { margin-left: 4px; color: var(--muted); }
+.map-device-presence { display: inline-flex; align-items: center; gap: 6px; padding: 6px 9px; border-radius: 20px; background: var(--raised); color: var(--muted); font-size: 10px; white-space: nowrap; }
+.map-device-presence i { width: 5px; height: 5px; border-radius: 50%; background: currentColor; }
+.map-device-presence.is-visible { color: var(--green); background: #a5ddb00d; }
+.map-device-connection { display: flex; align-items: center; gap: 7px; margin: 16px 0; color: var(--muted); font-size: 11px; line-height: 1.6; }
+.map-device-visibility-row { display: flex; align-items: center; justify-content: space-between; gap: 20px; border-top: 1px solid var(--line); padding-top: 16px; }
+.map-device-visibility-row label { color: var(--text); font-size: 12px; font-weight: 650; cursor: pointer; }
+.map-device-visibility-row p { font-size: 11px; margin: 5px 0 0; line-height: 1.7; }
+.map-visibility .switch { flex-shrink: 0; }
+.map-device-note { color: var(--muted); font-size: 10px; margin: 12px 0 0; line-height: 1.8; }
+.map-device-error { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-top: 14px; padding: 12px; border-radius: 10px; border: 1px solid #f09c8d25; background: #f09c8d08; }
+.map-device-error p { color: var(--red); font-size: 11px; margin: 0; line-height: 1.7; }
+.map-device-error .button { flex-shrink: 0; font-size: 11px; padding: 9px 12px; }
+@media (max-width: 600px) {
+  .map-visibility { padding: 16px; }
+  .map-device-header { flex-wrap: wrap; gap: 10px; }
+  .map-device-error { align-items: flex-start; flex-direction: column; }
+}
+.map-node .device-tile > .connection-glyph { width: 28px; height: 28px; margin: 14px; }
+
+.settings-relay-storage { grid-column: 1 / -1; }
+.settings-relay-storage h2 { margin-top: 0; }
+.settings-relay-storage > p { max-width: 760px; }
+.relay-storage-usage { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 12px; padding: 14px 16px; margin: 18px 0; background: var(--bg); border: 1px solid var(--line); border-radius: 11px; }
+.relay-storage-usage b { font-size: 12px; }
+.settings-relay-storage form .button { margin-top: 18px; }
+
+.mesh-custody-status { padding: 12px; margin: 0 0 16px; border: 1px solid var(--line); border-radius: 10px; font-size: 11px; line-height: 1.7; }
+.mesh-custody-status p { margin: 8px 0; }
+.mesh-custody-status a { display: inline-block; color: var(--gold); margin-top: 7px; }
+
+/* The sidebar owns discovery, this device and connection setup. */
+.network-inspector .map-visibility { max-width: none; margin: 0 0 22px; padding: 16px; background: var(--bg); }
+.network-inspector .map-device-header { flex-wrap: wrap; gap: 10px; }
+.map-device-connection .map-device-presence { margin-left: auto; flex-shrink: 0; }
+.network-inspector .map-device-identity h2 { font-size: 16px; }
+.network-inspector .mesh-identity { margin-top: 12px; }
+.network-inspector .network-metrics { gap: 10px; margin-bottom: 20px; }
+.network-inspector .network-metrics > div:not(.discovery-summary) { padding: 12px; }
+.nearby-scan-card { padding-bottom: 20px; margin-bottom: 20px; border-bottom: 1px solid var(--line); }
+.nearby-scan-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.nearby-scan-heading h3 { font-size: 16px; margin: 7px 0 0; line-height: 1.4; }
+.nearby-scan-heading .button { flex-shrink: 0; padding: 12px 14px; }
+.nearby-scan-card > p { font-size: 11px; line-height: 1.8; color: var(--muted); margin: 12px 0 6px; }
+.nearby-scan-card > small { display: block; font-size: 10px; line-height: 1.8; color: var(--faint); }
+.all-nearby-devices { border-top: 1px solid var(--line); padding-top: 20px; margin: 20px 0; }
+
+.network-link-summary { color: var(--muted); font-size: 11px; line-height: 1.8; margin: 0 0 14px; }
+
+@media (min-width: 981px) {
+  .network-inspector { position: sticky; top: 20px; max-height: calc(100dvh - 145px); overflow-y: auto; scrollbar-width: thin; scrollbar-color: var(--line) transparent; }
+  .network-inspector .nearby-scan-card { position: sticky; top: -22px; z-index: 4; padding-top: 4px; background: var(--panel); }
+}
+
+.connection-notice { display: flex; align-items: center; gap: 13px; margin: 18px 28px 0; padding: 14px 18px; border: 1px solid var(--line); border-radius: 12px; background: var(--panel); color: var(--text); }
+.connection-notice-icon { display: grid; place-items: center; flex-shrink: 0; width: 36px; height: 36px; border-radius: 10px; color: var(--cyan); background: #69d6dc0c; }
+.connection-notice-icon .connection-glyph { width: 19px; height: 19px; }
+.connection-notice > div { flex: 1; min-width: 0; }
+.connection-notice strong { font-size: 12px; font-weight: 600; }
+.connection-notice p { margin: 5px 0 0; color: var(--muted); font-size: 11px; line-height: 1.7; }
+.connection-notice .button { flex-shrink: 0; gap: 14px; font-size: 11px; }
+@media (max-width: 600px) {
+  .connection-notice { margin: 16px 18px 0; padding: 14px; flex-wrap: wrap; align-items: flex-start; }
+  .connection-notice .button { margin-left: 49px; }
+}

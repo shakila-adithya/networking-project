@@ -2,6 +2,7 @@
 import Link from "next/link";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { request, useMesh } from "@/lib/mesh";
+import { RelayStorageSettings } from "./relay-storage-settings";
 import { MyDevice } from "./my-device";
 import { Eyebrow } from "./ui";
 
@@ -154,6 +155,7 @@ export function Settings() {
         </>}
         {!preview && networksLoaded && !networksError && !networks.length && <p className="settings-help">No Wi-Fi or Ethernet connection found. Connect in your laptop's network settings, then select Refresh connections. Bluetooth may still be available on the Network map.</p>}
       </section>
+      <RelayStorageSettings />
     </div>
     {error && <p className="settings-notice bad" role="alert">{error}</p>}
     {message && <p className="settings-notice good" role="status">{message}</p>}
@@ -177,6 +179,6 @@ export function Settings() {
         {status?.error && <details className="settings-technical"><summary>Details from Relay</summary><p>{status.error}</p></details>}
       </div>
     </details>
-    <p className="settings-footer">Files are sent only to the people you choose. Joining a mesh does not download old files or back up other people's files on your device.</p>
+    <p className="settings-footer">Received files stay with their chosen recipients. Relay may temporarily carry encrypted data for other members within your storage limits; it does not create permanent backups.</p>
   </div>;
 }

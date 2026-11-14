@@ -143,6 +143,7 @@ final class OutgoingTransfer {
         notifyAll();
     }
 
+    synchronized void pause(String reason) { if (state != TransferState.DELIVERED) { state = TransferState.WAITING; error = reason; notifyAll(); } }
     synchronized void restart() {
         state = TransferState.OFFERING;
         error = "";
