@@ -82,7 +82,7 @@ export function NetworkMap() {
   const { preview, peers, neighbours, localId, transport, bluetooth, device, nearby } = useMesh(),
     [search, setSearch] = useState(""),
     [zoom, setZoom] = useState(1),
-    [selected, setSelected] = useState<Person | null>(null);
+    [selectedId, setSelectedId] = useState<string | null>(null);
   // Relay devices that were found nearby but are not connected yet appear as muted "discovered" nodes.
   const discovered: Person[] = nearby.items
     .filter((i) => i.relay && i.deviceId && i.state !== "CONNECTED" && !peers.some((p) => p.id === i.deviceId))
@@ -115,7 +115,10 @@ export function NetworkMap() {
         })),
       ];
   const selfNode = nodes[0];
-  const selectedIsSelf = !!selected && selected.id === selfNode.id;
+  const selected = selectedId === "__self__"
+    ? selfNode
+    : nodes.find((node) => node.id === selectedId) ?? null;
+  const selectedIsSelf = selectedId === "__self__";
   const selectedIsDiscovered = !!selected && selected.status === "DISCOVERED";
   const edges = preview
     ? [
@@ -199,7 +202,7 @@ export function NetworkMap() {
                 left: `${(p.x! / 1050) * 100}%`,
                 top: `${(p.y! / 760) * 100}%`,
               }}
-              onClick={() => setSelected(p)}
+              onClick={() => setSelectedId(i === 0 ? "__self__" : p.id)}
               aria-label={`Inspect ${p.name}`}
             >
               <span className="device-tile">
@@ -252,7 +255,7 @@ export function NetworkMap() {
           <button
             className="icon-button"
             aria-label="Reset inspector"
-            onClick={() => setSelected(null)}
+            onClick={() => setSelectedId(null)}
           >
             <Icon name="more-icon-3" />
           </button>
@@ -370,14 +373,14 @@ export function NetworkMap() {
         </div>
         <div className="map-tools">
           {[
-            ["map-control-focus", "Reset zoom", () => setZoom(1)],
+            ["focus", "Reset zoom", () => setZoom(1)],
             [
-              "map-control-plus",
+              "plus",
               "Zoom in",
               () => setZoom((z) => Math.min(1.5, z + 0.1)),
             ],
             [
-              "map-control-minus",
+              "minus",
               "Zoom out",
               () => setZoom((z) => Math.max(0.7, z - 0.1)),
             ],
@@ -387,7 +390,9 @@ export function NetworkMap() {
               aria-label={String(label)}
               onClick={fn as () => void}
             >
-              <Icon name={String(icon)} />
+              <span className={`map-tool-glyph ${String(icon)}`} aria-hidden="true">
+                {icon === "plus" ? "+" : icon === "minus" ? "−" : ""}
+              </span>
             </button>
           ))}
         </div>

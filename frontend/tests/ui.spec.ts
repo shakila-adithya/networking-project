@@ -77,6 +77,21 @@ test("mobile screens fit the viewport", async ({ page }) => {
   }
 });
 
+test("light mode is applied and remembered across navigation", async ({ page }) => {
+  await page.addInitScript(() => {
+    if (!localStorage.getItem("relay-theme")) localStorage.setItem("relay-theme", "dark");
+  });
+  await page.goto("/");
+  const toggle = page.getByRole("button", { name: "Use light mode" });
+  await toggle.click();
+  await expect(page.locator("html")).toHaveAttribute("data-theme", "light");
+  await expect(page.getByRole("button", { name: "Use dark mode" })).toBeVisible();
+  await page.getByRole("link", { name: "Messages", exact: true }).click();
+  await expect(page.locator("html")).toHaveAttribute("data-theme", "light");
+  await page.reload();
+  await expect(page.locator("html")).toHaveAttribute("data-theme", "light");
+});
+
 test("live chat sends to the selected backend peer and confirms delivery", async ({
   page,
 }) => {

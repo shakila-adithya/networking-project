@@ -1,6 +1,7 @@
 "use client";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
+import { useEffect, useState } from "react";
 import { MeshProvider, useMesh } from "@/lib/mesh";
 import { Icon, Avatar } from "./ui";
 export function Shell({ children }: { children: React.ReactNode }) {
@@ -13,6 +14,18 @@ export function Shell({ children }: { children: React.ReactNode }) {
 function Chrome({ children }: { children: React.ReactNode }) {
   const path = usePathname(),
     { preview, setPreview, peers, deviceName, transport, error } = useMesh();
+  const [theme, setTheme] = useState<"dark" | "light" | null>(null);
+  useEffect(() => {
+    setTheme(document.documentElement.dataset.theme === "light" ? "light" : "dark");
+  }, []);
+  function toggleTheme() {
+    const current = document.documentElement.dataset.theme === "light" ? "light" : "dark";
+    const next = current === "dark" ? "light" : "dark";
+    document.documentElement.dataset.theme = next;
+    document.documentElement.style.colorScheme = next;
+    localStorage.setItem("relay-theme", next);
+    setTheme(next);
+  }
   const nav = [
     [
       "/",
@@ -79,6 +92,15 @@ function Chrome({ children }: { children: React.ReactNode }) {
                 : `${peers.filter((p) => p.status === "ALIVE").length} nearby ${peers.filter((p) => p.status === "ALIVE").length === 1 ? "peer" : "peers"}`}
             </small>
           </div>
+          <button
+            type="button"
+            className="theme-toggle"
+            onClick={toggleTheme}
+            aria-label={theme ? `Use ${theme === "dark" ? "light" : "dark"} mode` : "Toggle color mode"}
+            title={theme ? `Use ${theme === "dark" ? "light" : "dark"} mode` : "Toggle color mode"}
+          >
+            <span aria-hidden="true">{theme === "light" ? "☾" : "☀"}</span>
+          </button>
           <Link href="/device/" aria-label="My device">
             <Avatar name={deviceName} size={38} />
           </Link>
