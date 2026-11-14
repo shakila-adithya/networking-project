@@ -37,7 +37,7 @@ For subsequent launches:
 ./scripts/run.sh --no-build -Dsetup.port=6085
 ```
 
-The launcher preserves `backend/storage-data/` and `backend/config/local-setup.json`. If Wi-Fi changes, open Settings → Choose your local network, refresh networks, select your current network and select Save and reconnect. The saved mesh password and file location are kept.
+The launcher preserves `backend/storage-data/` and `backend/config/local-setup.json`. If Wi-Fi changes, open Settings → Your network connection. Select Refresh connections after switching Wi-Fi, a phone hotspot or Ethernet. Choose your current connection and select Use this connection. If you left the mesh, join again from the Network map first. The saved mesh password and file location are kept.
 
 Build and check separately:
 

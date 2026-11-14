@@ -127,3 +127,27 @@ test("a discovered mesh groups its transports and joins the explicitly selected 
     meshId: "Community", password: "mesh-only-candidate-password", localAddress: "192.168.20.3", peerId: "A", address: "bt:AA:BB:CC:DD:EE:01",
   } });
 });
+
+
+test("local connections are refreshed manually rather than on the map polling timer", async ({ page }) => {
+  await page.clock.install();
+  const posts = await connectionFixture(page);
+  let checks = 0;
+  let address = "192.168.20.3";
+  await page.route("**/api/setup/networks", route => {
+    checks++;
+    return route.fulfill({ json: { networks: [{ address, label: `Wi-Fi — ${address}` }] } });
+  });
+  await page.goto("/");
+  const methods = page.getByRole("region", { name: "Connection methods" });
+  await methods.getByRole("tab", { name: /Wi-Fi \/ LAN/ }).click();
+  await expect(methods.getByRole("tabpanel")).toContainText("192.168.20.3");
+  const before = checks;
+  address = "10.0.0.5";
+  await page.clock.runFor(12100);
+  expect(checks).toBe(before);
+  await methods.getByRole("button", { name: "Refresh connections", exact: true }).click();
+  await expect(methods.getByRole("tabpanel")).toContainText("10.0.0.5");
+  expect(checks).toBeGreaterThan(before);
+  expect(posts).toEqual([]);
+});

@@ -17,6 +17,10 @@ export function Settings() {
   live.current = !preview;
   const [status, setStatus] = useState<Status | null>(null);
   const [networks, setNetworks] = useState<Network[]>([]);
+  const [networksError, setNetworksError] = useState("");
+  const [networksLoaded, setNetworksLoaded] = useState(false);
+  const networkRequest = useRef<AbortController | null>(null);
+  const [checkingNetworks, setCheckingNetworks] = useState(false);
   const [address, setAddress] = useState("");
   const [form, setForm] = useState(empty);
   const [busy, setBusy] = useState(false);
@@ -34,35 +38,63 @@ export function Settings() {
     }
   }, []);
   const refreshNetworks = useCallback(async () => {
-    const data = await request("/setup/networks");
-    if (!live.current) return;
-    setNetworks(data.networks || []);
-    if (!manualEdited.current) setForm(current => ({ ...current, peerPort: current.peerId ? current.peerPort : data.ports.peerPort, restPort: current.peerId ? current.restPort : data.ports.restPort }));
+    if (!live.current || networkRequest.current) return;
+    const controller = new AbortController();
+    networkRequest.current = controller;
+    setCheckingNetworks(true);
+    const timeout = setTimeout(() => controller.abort(), 8000);
+    try {
+      const data = await request("/setup/networks", { signal: controller.signal });
+      if (!live.current || networkRequest.current !== controller) return;
+      setNetworks(data.networks || []);
+      setNetworksError("");
+      if (!manualEdited.current) setForm(current => ({ ...current, peerPort: current.peerId ? current.peerPort : data.ports?.peerPort ?? current.peerPort, restPort: current.peerId ? current.restPort : data.ports?.restPort ?? current.restPort }));
+    } catch (e) {
+      if (!live.current || networkRequest.current !== controller) return;
+      setNetworks([]);
+      setNetworksError(controller.signal.aborted ? "Checking your connections took too long." : `Couldn't check your connections. ${(e as Error).message}`);
+    } finally {
+      clearTimeout(timeout);
+      if (networkRequest.current === controller) {
+        networkRequest.current = null;
+        if (live.current) { setNetworksLoaded(true); setCheckingNetworks(false); }
+      }
+    }
   }, []);
   useEffect(() => {
-    if (preview) { setStatus(null); setLoadError(""); setForm(empty); setAddress(""); setNetworks([]); networkEdited.current = false; manualEdited.current = false; setMessage(""); setError(""); return; }
+    if (preview) { setStatus(null); setLoadError(""); setForm(empty); setAddress(""); setNetworks([]); setNetworksError(""); setNetworksLoaded(false); setCheckingNetworks(false); networkEdited.current = false; manualEdited.current = false; setMessage(""); setError(""); return; }
     let alive = true;
     const load = async () => {
       try { await refreshStatus(); if (alive) setLoadError(""); }
       catch { if (alive) setLoadError("Can't reach Relay on this device. Start the Relay app, then try again."); }
     };
     load();
-    refreshNetworks().catch(() => { /* The status error above explains when the local app is unavailable. */ });
-    const timer = setInterval(load, 3000);
-    return () => { alive = false; clearInterval(timer); };
+    void refreshNetworks();
+    const timer = setInterval(() => { if (document.visibilityState === "visible") void load(); }, 3000);
+    return () => {
+      alive = false;
+      clearInterval(timer);
+      const pending = networkRequest.current;
+      networkRequest.current = null;
+      pending?.abort();
+    };
   }, [preview, refreshStatus, refreshNetworks]);
   const phase = status?.phase;
   const left = phase === "LEFT";
   const changedNetwork = !!status?.settings && networks.length > 0 && status.settings.address !== "127.0.0.1" && !networks.some(n => n.address === status.settings?.address);
   const starting = phase === "STARTING";
-  const disabled = preview || busy || starting || !status;
+  const disabled = preview || busy || starting || !status || !!loadError;
+  const canReconnect = !!status?.configured && !left;
+  // A stale saved address must not leave the only current connection unselected.
+  const chosenAddress = address === "127.0.0.1" || networks.some(n => n.address === address)
+    ? address : networks.length === 1 ? networks[0].address : "";
   const connection = preview ? ["This is a design preview", "These are sample settings. Switch to your live network to change this device."]
     : !status ? ["Checking your connection…", "Relay runs on this device. You don't need internet."]
     : left ? ["You left the mesh", "Your received files and device settings are still here. Join a mesh again from the Network map."]
     : !status.configured ? ["Join your first mesh", "Open the Network map to find nearby Relay meshes, or create one for other people to join."]
     : phase === "RESTART_REQUIRED" ? ["Your changes are saved", "Restart Relay below to use them. Finish any file transfers first."]
     : phase === "PEER_ID_CONFLICT" ? ["Two devices have the same ID", "Choose a different Device ID under Advanced settings, then save and reconnect."]
-    : changedNetwork ? ["Your network changed", "Choose your current Wi-Fi or Ethernet network below to reconnect. You don't need to enter your mesh password again."]
+    : changedNetwork ? ["Your network changed", "Choose your new connection below, then select Use this connection."]
     : phase === "ERROR" ? ["Relay couldn't connect", "Check your network, then restart Relay. If it still fails, check the help under Advanced settings."]
     : starting ? ["Connecting to your mesh…", "Please wait while Relay starts your connections."]
     : phase === "CONNECTED" ? ["You're connected", "You can chat and send files to reachable devices. See your connections on the Network map."]
@@ -92,17 +124,36 @@ export function Settings() {
         <Link className="button secondary" href="/">Open Network map <span aria-hidden="true">↗</span></Link>
       </section>
       <section className="settings-card settings-network" aria-labelledby="network-title">
-        <div className="settings-card-head"><div><Eyebrow>WI-FI &amp; ETHERNET</Eyebrow><h2 id="network-title">Choose your local network</h2></div><button className="button secondary" disabled={disabled} onClick={() => act(refreshNetworks)}>Refresh networks</button></div>
-        <p>Use this if you changed Wi-Fi, plugged in Ethernet, or Relay is using an old address. Other devices must be able to reach this network.</p>
-        <form onSubmit={e => { e.preventDefault(); act(async () => { const data = await post("network", { address }); networkEdited.current = false; setMessage(data.message); }); }}>
-          <label htmlFor="settings-network">Wi-Fi or Ethernet network</label>
-          <div className="settings-network-row"><select id="settings-network" value={address} disabled={disabled || left || !status?.configured} onChange={e => { networkEdited.current = true; setAddress(e.target.value); }}><option value="">Choose a current network</option>{address && address !== "127.0.0.1" && !networks.some(n => n.address === address) && <option value={address} disabled>{address} — no longer available</option>}{options}</select>
-          <button className="button primary" type="submit" disabled={disabled || left || !status?.configured || !address || (address !== "127.0.0.1" && !networks.some(n => n.address === address))}>{busy ? "Working…" : "Save and reconnect"}</button></div>
-        </form>
-        <p className="settings-help">Reconnecting interrupts current Relay transfers. This keeps your mesh password and files, and does not change your computer's Wi-Fi connection.</p>
-        {(!status?.configured || left) && !preview && <p className="settings-help">Create or join a mesh on the Network map first.</p>}
+        <div className="settings-card-head">
+          <div><h2 id="network-title">Your network connection</h2><p>Switched Wi-Fi, changed your phone hotspot, or plugged in Ethernet? Select Refresh connections, then choose the connection to use.</p></div>
+          <button className="button secondary" disabled={preview || checkingNetworks} aria-busy={checkingNetworks} onClick={() => void refreshNetworks()}>{checkingNetworks ? "Refreshing…" : "Refresh connections"}</button>
+        </div>
+        {networksError && <p className="field-error" role="alert">{networksError} Select Refresh connections to try again.</p>}
+        {canReconnect || preview ? <>
+          {changedNetwork && <p className="settings-network-note">Relay's old connection is no longer available. Choose the new one below.</p>}
+          <form className="settings-network-form" onSubmit={e => {
+            e.preventDefault();
+            if (!chosenAddress || networksError || !networksLoaded || checkingNetworks) return;
+            act(async () => {
+              await post("network", { address: chosenAddress });
+              networkEdited.current = false;
+              setMessage("Relay is reconnecting using this connection. Your mesh and files stay saved.");
+            });
+          }}>
+            <label htmlFor="settings-network">Connection to use</label>
+            <div className="settings-network-row">
+              <select id="settings-network" value={chosenAddress} disabled={disabled || checkingNetworks || !networksLoaded || !!networksError} onChange={e => { networkEdited.current = true; setAddress(e.target.value); }}>
+                <option value="">{!networksLoaded && !preview ? "Checking your connections…" : "Choose a connection"}</option>{options}
+              </select>
+              <button className="button primary" type="submit" disabled={disabled || checkingNetworks || !networksLoaded || !!networksError || !chosenAddress}>{busy ? "Connecting…" : "Use this connection"}</button>
+            </div>
+            <p className="settings-help">Updating interrupts current Relay transfers. Your mesh password and received files stay saved.</p>
+          </form>
+        </> : <>
+          {!networksLoaded ? <p className="settings-help" role="status">Checking your connections…</p> : !networksError && networks.length > 0 && <ul className="settings-detected-connections" aria-label="Connections found">{networks.map(network => <li key={network.address}>{network.label}</li>)}</ul>}
+        </>}
+        {!preview && networksLoaded && !networksError && !networks.length && <p className="settings-help">No Wi-Fi or Ethernet connection found. Connect in your laptop's network settings, then select Refresh connections. Bluetooth may still be available on the Network map.</p>}
       </section>
-      <section className="settings-card settings-methods" aria-labelledby="methods-title"><div><Eyebrow>CONNECTION OPTIONS</Eyebrow><h2 id="methods-title">Bluetooth, Wi-Fi Direct &amp; hotspot</h2><p>Check what your device supports, scan for nearby devices, or start a hotspot on the Network map. Relay shows the connection type each link actually uses.</p></div><Link className="button secondary" href="/">Manage connections <span aria-hidden="true">↗</span></Link></section>
     </div>
     {error && <p className="settings-notice bad" role="alert">{error}</p>}
     {message && <p className="settings-notice good" role="status">{message}</p>}

@@ -1,6 +1,6 @@
 "use client";
 import Link from "next/link";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { request, useMesh } from "@/lib/mesh";
 import { ConnectionMethods, LocalNetwork, RadioStatus } from "./connection-methods";
 
@@ -18,6 +18,7 @@ export function MeshMembership({ showPeers = true }: { showPeers?: boolean }) {
   const [networks, setNetworks] = useState<LocalNetwork[]>([]);
   const [radioError, setRadioError] = useState("");
   const [networksError, setNetworksError] = useState("");
+  const networkCheck = useRef(false);
   const [loadError, setLoadError] = useState("");
   const [loading, setLoading] = useState(true);
   const [localAddress, setLocalAddress] = useState("");
@@ -29,22 +30,28 @@ export function MeshMembership({ showPeers = true }: { showPeers?: boolean }) {
   const [busy, setBusy] = useState(false);
   const load = useCallback(async () => {
     if (preview) return;
-    const [m, r, n] = await Promise.allSettled([request("/membership"), request("/radio"), request("/setup/networks")]);
+    const [m, r] = await Promise.allSettled([request("/membership"), request("/radio")]);
     if (m.status === "fulfilled" && m.value.phase) { setMembership({ ...empty, ...m.value, nearby: m.value.nearby || [] }); setLoadError(""); }
     else setLoadError(m.status === "rejected" ? m.reason.message : "The mesh service did not report its state. Restart the updated backend.");
     if (r.status === "fulfilled") { setRadio({ ...r.value, adapters: r.value.adapters || [], peers: r.value.peers || [] }); setRadioError(""); }
     else { setRadio(null); setRadioError(r.reason.message); }
-    if (n.status === "fulfilled") { setNetworks(n.value.networks || []); setNetworksError(""); }
-    else { setNetworks([]); setNetworksError(n.reason.message); }
     setLoading(false);
+  }, [preview]);
+  const refreshNetworks = useCallback(async () => {
+    if (preview || networkCheck.current) return;
+    networkCheck.current = true;
+    try { const data = await request("/setup/networks"); setNetworks(data.networks || []); setNetworksError(""); }
+    catch (e) { setNetworks([]); setNetworksError((e as Error).message); }
+    finally { networkCheck.current = false; }
   }, [preview]);
   useEffect(() => {
     setPassword(""); setSelection(null); setError(""); setMessage("");
     if (preview) return;
     void load();
+    void refreshNetworks();
     const timer = setInterval(() => void load(), 4000);
     return () => clearInterval(timer);
-  }, [preview, load]);
+  }, [preview, load, refreshNetworks]);
   async function operation(path: string, body: object = {}): Promise<boolean> {
     if (preview || busy) return false;
     setBusy(true); setError(""); setMessage("");
@@ -68,7 +75,7 @@ export function MeshMembership({ showPeers = true }: { showPeers?: boolean }) {
   const groups = [...new Set(membership.nearby.map(item => item.meshId))].map(id => ({ id, items: membership.nearby.filter(item => item.meshId === id) }));
   const scanning = !!membership.scanning || nearby.scanning;
   return <section className="mesh-connections" aria-label="Relay mesh membership">
-    <section className="mesh-membership-card" aria-label="Mesh membership">
+    <section id="mesh-membership" className="mesh-membership-card" aria-label="Mesh membership">
       <div className="connection-section-heading"><div><h3>Your mesh</h3><p>One mesh at a time. Join with its password.</p></div><button className="button" disabled={preview || busy || scanning || loading} onClick={() => void operation("/membership/scan")}>{scanning ? "Scanning meshes…" : "Scan meshes"}</button></div>
       {preview ? <p className="connection-preview-note">Design preview · Switch to live to create or join a real mesh.</p> : <>
         <div className={`membership-status ${membership.phase === "CONNECTED" ? "joined" : ""}`} role="status"><div><b>{membership.meshId || "No mesh joined"}</b><small><i className="status-dot" />{loading ? "Checking mesh…" : phases[membership.phase] || "Checking connection"}</small></div>
@@ -83,6 +90,8 @@ export function MeshMembership({ showPeers = true }: { showPeers?: boolean }) {
           <label className="connection-field">Mesh name<input className="text-input" aria-label="Mesh name" required pattern="[A-Za-z0-9_.\-]{1,80}" value={meshId} readOnly={selection !== "create"} onChange={e => setMeshId(e.target.value)} /><small>1–80 letters, numbers, dots, underscores or hyphens.</small></label>
           {selection !== "create" && <label className="connection-field">Connection<select className="text-input" aria-label="Mesh connection" value={`${selection.peerId}/${selection.address}`} onChange={event => { const item = membership.nearby.find(item => `${item.peerId}/${item.address}` === event.target.value && item.meshId === meshId); if (item) setSelection(item); }}>{membership.nearby.filter(item => item.meshId === meshId).map(item => <option value={`${item.peerId}/${item.address}`} key={`${item.peerId}/${item.address}`}>{methodName(item)} · {item.address}</option>)}</select></label>}
           <label className="connection-field">Local network<select className="text-input" aria-label="Mesh local network" required value={localAddress} onChange={e => setLocalAddress(e.target.value)}><option value="">Choose a local network</option>{!networks.length && <option value="127.0.0.1">No LAN address · use Bluetooth</option>}{networks.map(n => <option key={n.address} value={n.address}>{n.label}</option>)}</select></label>
+          <div className="connection-actions"><button className="button" type="button" disabled={busy} onClick={() => void refreshNetworks()}>Refresh connections</button></div>
+          <p className="method-help">Switched Wi-Fi, phone hotspot or Ethernet? Refresh connections before joining.</p>
           <label className="connection-field">Mesh password<input className="text-input" aria-label="Mesh password" type="password" minLength={16} maxLength={256} required autoComplete="new-password" value={password} onChange={e => setPassword(e.target.value)} /><small>16–256 characters. Anyone with this password can join.</small></label>
           <p className="method-help">Names are unverified until authentication succeeds. Joining enables Bluetooth visibility; change it by selecting your device on the map.</p>
           <div className="connection-actions"><button className="button primary" disabled={busy} type="submit">{busy ? "Authenticating…" : selection === "create" ? "Create this mesh" : "Authenticate and join"}</button><button className="button" type="button" disabled={busy} onClick={() => { setSelection(null); setPassword(""); }}>Cancel</button></div>
@@ -92,6 +101,6 @@ export function MeshMembership({ showPeers = true }: { showPeers?: boolean }) {
       {message && <p role="status" className="connection-message">{message}</p>}
       {error && <p role="alert" className="connection-note error">{error}</p>}
     </section>
-    <ConnectionMethods radio={radio} radioError={radioError} networks={networks} networksError={networksError} bluetoothAvailable={membership.bluetoothAvailable} bluetoothReason={membership.bluetoothReason} discoveryError={membership.discoveryError} scanning={scanning} busy={busy} checking={loading} showPeers={showPeers} reload={load} scanBluetooth={scanBluetooth} perform={operation} />
+    <ConnectionMethods radio={radio} radioError={radioError} networks={networks} networksError={networksError} bluetoothAvailable={membership.bluetoothAvailable} bluetoothReason={membership.bluetoothReason} discoveryError={membership.discoveryError} scanning={scanning} busy={busy} checking={loading} showPeers={showPeers} reload={refreshNetworks} scanBluetooth={scanBluetooth} perform={operation} />
   </section>;
 }
