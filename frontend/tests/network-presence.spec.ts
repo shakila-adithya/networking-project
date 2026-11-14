@@ -33,8 +33,9 @@ test("visible unjoined devices and mesh groups appear without a running mesh ser
   await discoveryFixture(page); await page.goto("/");
   await expect(page.getByRole("button", { name: "Inspect Visible laptop", exact: true })).toHaveCount(1);
   await page.getByRole("button", { name: "Inspect Visible laptop", exact: true }).click();
-  await expect(page.locator(".network-inspector")).toContainText("has not joined a mesh");
+  await expect(page.locator(".network-inspector")).toContainText("not in a mesh yet");
   await page.getByRole("button", { name: "Inspect NearbyGroup", exact: true }).click();
+  await page.getByRole("button", { name: "Join NearbyGroup", exact: true }).click();
   await expect(page.getByLabel("Mesh password", { exact: true })).toBeVisible();
   await expect(page.getByLabel("Mesh name", { exact: true })).toHaveValue("NearbyGroup");
   await page.setViewportSize({ width: 390, height: 844 });
@@ -88,11 +89,12 @@ for (const legacy of [false, true]) {
       message: "Relay isn't connected to a mesh yet. Join one on the Network map, or check your connection in Settings.",
     } }));
     await page.goto("/");
-    const notice = page.locator(".connection-notice");
-    await expect(notice).toHaveAttribute("role", "status");
-    await expect(notice).toContainText("Ready to join a mesh");
+    const ready = page.locator(".mesh-ready-card");
+    await expect(ready).toHaveAttribute("role", "status");
+    await expect(ready).toContainText("Ready to join a mesh");
+    await expect(page.locator(".connection-notice")).toHaveCount(0);
     await expect(page.locator(".api-error")).toHaveCount(0);
-    await expect(notice.getByRole("link")).toHaveCount(0);
+    const notice = page.locator(".connection-notice");
     await page.getByRole("navigation", { name: "Main navigation" }).getByRole("link", { name: "Messages", exact: true }).click();
     await expect(notice.getByRole("link", { name: /Open Network map/ })).toBeVisible();
     await page.setViewportSize({ width: 390, height: 844 });

@@ -27,7 +27,7 @@ From the repository root on Linux/macOS:
 ./scripts/run.sh
 ```
 
-Open **http://localhost:6080**, switch to Live and use **Network map → Create mesh / Scan meshes / Join**. Settings also retains manual device setup. The launcher builds both parts, runs Java verification, and starts the setup agent. Keep the terminal running; Ctrl+C stops it.
+Open **http://localhost:6080**, switch to Live and use **Network map**: choose a connection method in Connection setup, press Scan nearby, then select a mesh or device on the map and press Join or Connect. The first connection generates the mesh password (shown under Mesh password to share); later devices enter it. A short how-to guide is under the map. There is no separate "create mesh" step and no manual mesh form in Settings. The launcher builds both parts, runs Java verification, and starts the setup agent. Keep the terminal running; Ctrl+C stops it.
 
 For subsequent launches:
 

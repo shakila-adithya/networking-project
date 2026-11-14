@@ -229,6 +229,13 @@ public final class SetupAgent implements AutoCloseable {
                 response.put("error", error);
                 json(exchange, 200, response); return;
             }
+            if (method.equals("GET") && path.equals("/api/membership/password")) {
+                // Loopback-only (LocalUserGuard above): lets the owner share the password with devices joining later.
+                var current = active;
+                if (current == null) { json(exchange, 404, Map.of("message", "This device is not in a mesh.")); return; }
+                json(exchange, 200, Map.of("meshId", current.peer().clusterId(), "password", current.peer().discoverySecret()));
+                return;
+            }
             if (!method.equals("POST")) { json(exchange, 405, Map.of("message", "Use POST for mesh operations")); return; }
             if (path.equals("/api/membership/scan")) {
                 directory.scan();

@@ -31,7 +31,7 @@ Keep the terminal open. Open **http://localhost:6080** on that computer. No sepa
 1. Open the Network map on this device and switch to the live network.
 2. Select Scan meshes, choose the mesh and enter its password. Names are unverified until authentication succeeds.
 3. Accept any operating-system Bluetooth pairing prompts. Watch the map for authenticated active links.
-4. To enter known settings manually, use Settings → Advanced settings → Set up a mesh manually. Choose a unique Device ID and use the same mesh name and password as the other members. Select Save manual settings and reconnect.
+4. The first device to connect chooses the shared password; later devices use Join. The owner can reveal the saved password under Mesh membership → Show password to share.
 
 All devices must run the updated authenticated protocol. Allow Relay or Java through the firewall on your trusted local network when prompted. Some guest Wi-Fi networks isolate devices. See `docs/join-device-C.md` for troubleshooting.
 

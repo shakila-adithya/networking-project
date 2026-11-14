@@ -2338,3 +2338,84 @@ hr {
   .connection-notice { margin: 16px 18px 0; padding: 14px; flex-wrap: wrap; align-items: flex-start; }
   .connection-notice .button { margin-left: 49px; }
 }
+
+/* Network map guide and sidebar readiness card */
+.how-it-works { grid-column: 1 / -1; padding: 28px; background: var(--panel); border: 1px solid var(--line); border-radius: 18px; min-width: 0; }
+.how-head h2 { font-size: 22px; letter-spacing: -.45px; margin: 10px 0 8px; }
+.how-head p { max-width: 70ch; margin: 0 0 22px; color: var(--muted); font-size: 13px; line-height: 1.7; }
+.how-it-works h3 { font-size: 13px; margin: 26px 0 14px; color: var(--text); }
+.how-steps { list-style: none; padding: 0; margin: 0; display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 14px; }
+.how-steps li { display: flex; gap: 14px; padding: 16px; background: var(--bg); border: 1px solid var(--line); border-radius: 14px; }
+.how-step-number { flex: none; width: 28px; height: 28px; display: grid; place-items: center; border-radius: 50%; background: var(--gold); color: #1b1608; font-weight: 700; }
+.how-it-works p { margin: 4px 0 0; color: var(--muted); line-height: 1.7; }
+.how-ways { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 14px; }
+.how-ways article { display: flex; gap: 12px; padding: 16px; background: var(--bg); border: 1px solid var(--line); border-radius: 14px; }
+.how-icon { flex: none; width: 34px; height: 34px; display: grid; place-items: center; border-radius: 10px; background: var(--raised); color: var(--cyan); }
+.how-icon svg { width: 20px; height: 20px; }
+.how-ways small { display: block; margin-top: 8px; color: var(--faint); line-height: 1.7; }
+.how-columns { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 24px; }
+.how-list { list-style: none; padding: 0; margin: 0; display: grid; gap: 10px; }
+.how-list li { display: grid; gap: 2px; padding: 12px 14px; background: var(--bg); border: 1px solid var(--line); border-radius: 12px; }
+.how-list span { color: var(--muted); line-height: 1.7; }
+.mesh-ready-card { display: flex; gap: 14px; align-items: flex-start; padding: 16px; background: var(--bg); border: 1px solid var(--line); border-radius: 14px; margin-bottom: 16px; }
+.mesh-ready-card > span { flex: none; width: 34px; height: 34px; display: grid; place-items: center; border-radius: 10px; background: var(--raised); color: var(--cyan); }
+.mesh-ready-card > span svg { width: 20px; height: 20px; }
+.mesh-ready-card p { margin: 4px 0 0; color: var(--muted); line-height: 1.7; }
+@media (max-width: 1100px) { .how-ways { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+@media (max-width: 860px) { .how-it-works { grid-column: 1; } .how-steps, .how-columns, .how-ways { grid-template-columns: minmax(0, 1fr); } }
+.network-inspector .nearby-scan-card { position: static; top: auto; margin: 20px 0 0; padding: 20px 0 0; border-top: 1px solid var(--line); border-bottom: 0; background: transparent; }
+.mesh-connection-setup { margin-top: 20px; }
+.how-head p { margin-bottom: 26px; }
+
+/* Header: keep the main navigation centred between the brand and an empty right side. */
+@media (min-width: 1201px) {
+  .header { display: grid; grid-template-columns: 1fr auto 1fr; justify-content: stretch; }
+  .main-nav { flex: none; width: auto; max-width: none; justify-self: center; }
+  .header-spacer { display: block; }
+}
+.header-spacer { display: none; }
+
+/* How Relay works page */
+.how-page { grid-column: auto; max-width: 1180px; margin: 30px auto 40px; padding: 32px; }
+.how-head h1 { font-size: 30px; letter-spacing: -.6px; margin: 10px 0 10px; }
+@media (max-width: 860px) { .how-page { margin: 18px 16px 30px; padding: 20px; } }
+
+/* Scan nearby card: a calm, aligned block at the end of the sidebar. */
+.network-inspector .nearby-scan-card { position: static; margin: 22px 0 0; padding: 22px 0 0; border-top: 1px solid var(--line); border-bottom: 0; background: transparent; display: grid; gap: 12px; }
+.nearby-scan-heading { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 14px; }
+.nearby-scan-heading h3 { margin: 6px 0 0; font-size: 17px; }
+.nearby-scan-card > p, .nearby-scan-card > small { margin: 0; }
+.nearby-scan-heading .button { min-width: 112px; justify-content: center; }
+@media (max-width: 420px) { .nearby-scan-heading { grid-template-columns: minmax(0, 1fr); } .nearby-scan-heading .button { width: 100%; } }
+
+/* Five navigation items: scroll inside the bar on narrow screens instead of widening the page. */
+@media (max-width: 850px) {
+  .main-nav { left: 18px; right: 18px; transform: none; width: auto; max-width: none; overflow-x: auto; justify-content: flex-start; scrollbar-width: none; }
+  .main-nav a, .main-nav .nav-mode { flex: none; }
+}
+
+/* Map heading: short plain-language intro and the three steps. */
+.map-heading p { max-width: 62ch; line-height: 1.7; color: var(--muted); }
+.map-heading-steps { list-style: none; display: flex; flex-wrap: wrap; gap: 8px; margin: 16px 0 0; padding: 0; }
+.map-heading-steps li { display: inline-flex; align-items: center; gap: 8px; padding: 6px 12px 6px 6px; border: 1px solid var(--line); border-radius: 999px; background: var(--panel); color: var(--muted); font-size: 11px; }
+.map-heading-steps b { width: 20px; height: 20px; display: grid; place-items: center; border-radius: 50%; background: var(--gold); color: #1b1608; font-size: 11px; }
+.map-heading .badge-row { max-width: none; }
+
+/* One row for the status badges and the three steps; sidebar starts level with the map. */
+.map-heading-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 16px; margin-top: 18px; }
+.map-heading-meta .badge-row, .map-heading-meta .map-heading-steps { margin: 0; }
+.map-page .network-inspector { grid-row: 2; }
+
+/* Heading badges share the look of the step pills beside them. */
+.map-heading-meta .badge { display: inline-flex; align-items: center; gap: 8px; height: auto; min-height: 32px; padding: 6px 12px 6px 10px; border: 1px solid var(--line); border-radius: 999px; background: var(--panel); color: var(--muted); font-size: 11px; font-weight: 400; letter-spacing: 0; text-transform: none; }
+.map-heading-meta .badge i { width: 8px; height: 8px; margin: 0 4px 0 2px; flex: none; }
+.map-heading-steps li { min-height: 32px; }
+
+/* Desktop: map and sidebar share one fixed height, so they always end on the same line and the map never resizes when something is selected. */
+@media (min-width: 981px) {
+  .map-page { --panel-height: 960px; }
+  .map-page .network-inspector { position: static; height: var(--panel-height); max-height: var(--panel-height); overflow-y: auto; }
+  .map-page .map-area { align-self: start; display: block; }
+  .map-page .map-area .topology { height: var(--panel-height); min-height: 0; }
+}
+.map-heading .map-key { padding: 14px 0 0; pointer-events: auto; }
