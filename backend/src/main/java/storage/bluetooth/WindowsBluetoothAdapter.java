@@ -30,7 +30,7 @@ public final class WindowsBluetoothAdapter implements LocalBluetooth {
     private static final int LUP_CONTAINERS = 0x0002, LUP_RETURN_NAME = 0x0010, LUP_RETURN_ADDR = 0x0100,
             LUP_FLUSHCACHE = 0x1000;
     private static final int WSAQUERYSET_SIZE = 120;
-    private static final int WSA_E_NO_MORE = 10110, WSAENOMORE = 10102;
+    private static final int WSA_E_NO_MORE = 10110, WSAENOMORE = 10102, WSASERVICE_NOT_FOUND = 10108;
     private static final int RADIO_INFO_SIZE = 520;
     private static final int RESULT_BUFFER = 4096;
 
@@ -38,8 +38,9 @@ public final class WindowsBluetoothAdapter implements LocalBluetooth {
         static final Linker LINKER = Linker.nativeLinker();
         static final java.lang.foreign.StructLayout STATE = Linker.Option.captureStateLayout();
         static final java.lang.invoke.VarHandle LAST_ERROR = STATE.varHandle(java.lang.foreign.MemoryLayout.PathElement.groupElement("GetLastError"));
+        static final java.lang.invoke.VarHandle WSA_LAST_ERROR = STATE.varHandle(java.lang.foreign.MemoryLayout.PathElement.groupElement("WSAGetLastError"));
         static final MethodHandle FIND_FIRST_RADIO, FIND_RADIO_CLOSE, GET_RADIO_INFO, IS_DISCOVERABLE, ENABLE_DISCOVERY,
-                ENABLE_INCOMING, IS_CONNECTABLE, CLOSE_HANDLE, LOOKUP_BEGIN, LOOKUP_NEXT, LOOKUP_END, WSA_ERROR;
+                ENABLE_INCOMING, IS_CONNECTABLE, CLOSE_HANDLE, LOOKUP_BEGIN, LOOKUP_NEXT, LOOKUP_END;
 
         static {
             SymbolLookup bth = SymbolLookup.libraryLookup("bthprops.cpl", Arena.global());
@@ -54,10 +55,9 @@ public final class WindowsBluetoothAdapter implements LocalBluetooth {
             ENABLE_INCOMING = hWithError(bth, "BluetoothEnableIncomingConnections");
             IS_CONNECTABLE = h(bth, "BluetoothIsConnectable", FunctionDescriptor.of(JAVA_INT, ADDRESS));
             CLOSE_HANDLE = h(k32, "CloseHandle", FunctionDescriptor.of(JAVA_INT, ADDRESS));
-            LOOKUP_BEGIN = h(ws2, "WSALookupServiceBeginW", FunctionDescriptor.of(JAVA_INT, ADDRESS, JAVA_INT, ADDRESS));
-            LOOKUP_NEXT = h(ws2, "WSALookupServiceNextW", FunctionDescriptor.of(JAVA_INT, ADDRESS, JAVA_INT, ADDRESS, ADDRESS));
-            LOOKUP_END = h(ws2, "WSALookupServiceEnd", FunctionDescriptor.of(JAVA_INT, ADDRESS));
-            WSA_ERROR = h(ws2, "WSAGetLastError", FunctionDescriptor.of(JAVA_INT));
+            LOOKUP_BEGIN = hLookup(ws2, "WSALookupServiceBeginW", FunctionDescriptor.of(JAVA_INT, ADDRESS, JAVA_INT, ADDRESS));
+            LOOKUP_NEXT = hLookup(ws2, "WSALookupServiceNextW", FunctionDescriptor.of(JAVA_INT, ADDRESS, JAVA_INT, ADDRESS, ADDRESS));
+            LOOKUP_END = hLookup(ws2, "WSALookupServiceEnd", FunctionDescriptor.of(JAVA_INT, ADDRESS));
         }
 
         static MethodHandle h(SymbolLookup lookup, String name, FunctionDescriptor descriptor) {
@@ -67,6 +67,10 @@ public final class WindowsBluetoothAdapter implements LocalBluetooth {
         static MethodHandle hWithError(SymbolLookup lookup, String name) {
             return LINKER.downcallHandle(lookup.find(name).orElseThrow(),
                     FunctionDescriptor.of(JAVA_INT, ADDRESS, JAVA_INT), Linker.Option.captureCallState("GetLastError"));
+        }
+        static MethodHandle hLookup(SymbolLookup lookup, String name, FunctionDescriptor descriptor) {
+            return LINKER.downcallHandle(lookup.find(name).orElseThrow(), descriptor,
+                    Linker.Option.captureCallState("WSAGetLastError"));
         }
     }
 
@@ -161,17 +165,26 @@ public final class WindowsBluetoothAdapter implements LocalBluetooth {
     @Override public synchronized String name() { return advertising ? advertisedName : radioName; }
     @Override public synchronized boolean isAdvertising() { return advertising; }
 
+    /** These lookup statuses mean that enumeration has no more matching results, not a broken radio. */
+    static boolean noScanResults(int code) {
+        return code == WSASERVICE_NOT_FOUND || code == WSA_E_NO_MORE || code == WSAENOMORE;
+    }
+
     @Override
     public List<Nearby> scan(Duration duration) throws IOException {
         // Winsock's Bluetooth inquiry length is chosen by the stack (about 10 s); `duration` only bounds retries.
         try (Arena arena = Arena.ofConfined()) {
+            MemorySegment state = arena.allocate(Api.STATE);
             MemorySegment query = arena.allocate(WSAQUERYSET_SIZE);
             query.set(JAVA_INT, 0, WSAQUERYSET_SIZE);
             query.set(JAVA_INT, 40, NS_BTH);
             MemorySegment handleOut = arena.allocate(ADDRESS);
             int flags = LUP_CONTAINERS | LUP_RETURN_NAME | LUP_RETURN_ADDR | LUP_FLUSHCACHE;
-            if (((int) Api.LOOKUP_BEGIN.invokeExact(query, flags, handleOut)) != 0)
-                throw new IOException("Bluetooth scan failed: Winsock error " + (int) Api.WSA_ERROR.invokeExact());
+            if (((int) Api.LOOKUP_BEGIN.invokeExact(state, query, flags, handleOut)) != 0) {
+                int code = (int) Api.WSA_LAST_ERROR.get(state, 0L);
+                if (noScanResults(code)) { scanError = ""; return List.of(); }
+                throw new IOException("Windows Bluetooth inquiry could not start (Winsock error " + code + ")");
+            }
             MemorySegment lookup = handleOut.get(ADDRESS, 0);
             Map<String, Nearby> found = new LinkedHashMap<>();
             try {
@@ -181,17 +194,18 @@ public final class WindowsBluetoothAdapter implements LocalBluetooth {
                     buffer.fill((byte) 0);
                     buffer.set(JAVA_INT, 0, WSAQUERYSET_SIZE);
                     length.set(JAVA_INT, 0, RESULT_BUFFER);
-                    int result = (int) Api.LOOKUP_NEXT.invokeExact(lookup, LUP_RETURN_NAME | LUP_RETURN_ADDR, length, buffer);
+                    int result = (int) Api.LOOKUP_NEXT.invokeExact(state, lookup, LUP_RETURN_NAME | LUP_RETURN_ADDR, length, buffer);
                     if (result != 0) {
-                        int code = (int) Api.WSA_ERROR.invokeExact();
-                        if (code == WSA_E_NO_MORE || code == WSAENOMORE) break;
-                        throw new IOException("Bluetooth scan failed: Winsock error " + code);
+                        int code = (int) Api.WSA_LAST_ERROR.get(state, 0L);
+                        if (noScanResults(code)) break;
+                        throw new IOException("Windows Bluetooth inquiry could not read a device (Winsock error " + code + ")");
                     }
                     Nearby device = parseResult(buffer);
                     if (device != null) found.putIfAbsent(device.address(), device);
                 }
             } finally {
-                int ignored = (int) Api.LOOKUP_END.invokeExact(lookup);
+                if ((int) Api.LOOKUP_END.invokeExact(state, lookup) != 0)
+                    System.err.println("Could not close Bluetooth inquiry (Winsock error " + (int) Api.WSA_LAST_ERROR.get(state, 0L) + ")");
             }
             scanError = "";
             long deadline = System.nanoTime() + duration.toNanos();

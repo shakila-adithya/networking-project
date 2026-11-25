@@ -21,6 +21,8 @@ public final class BluetoothMeshDirectory implements AutoCloseable {
         try { adapter = BluetoothPlatform.open(restoreFile); }
         catch (Exception e) { reason = "Bluetooth unavailable: " + e.getMessage(); }
     }
+    /** Inject the radio boundary for focused discovery checks without changing physical radio settings. */
+    BluetoothMeshDirectory(LocalBluetooth adapter) { this.adapter = Objects.requireNonNull(adapter); }
     public LocalBluetooth adapter() { return adapter; }
     public String reason() { return reason; }
     public boolean scanning() { return scanning.get(); }
@@ -32,7 +34,7 @@ public final class BluetoothMeshDirectory implements AutoCloseable {
     }
     private final class ScanTask implements Runnable {
         public void run() {
-            try { nearby = adapter.scan(java.time.Duration.ofSeconds(8)); lastScan = System.currentTimeMillis(); }
+            try { nearby = adapter.scan(java.time.Duration.ofSeconds(8)); lastScan = System.currentTimeMillis(); reason = ""; }
             catch (Exception e) { reason = "Bluetooth scan failed: " + e.getMessage(); }
             finally { scanning.set(false); }
         }

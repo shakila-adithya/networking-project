@@ -8,6 +8,15 @@ import static org.junit.jupiter.api.Assertions.*;
 import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 class BluetoothServiceTest {
+    @Test
+    @org.junit.jupiter.api.Timeout(60)
+    void windowsDeviceInquiryAcceptsAnEmptyResult() throws Exception {
+        assumeTrue(Boolean.getBoolean("relay.hardwareTests") && WindowsRfcomm.isSupported(),
+                "Opt in to a Windows radio inquiry with -Drelay.hardwareTests=true");
+        try (var adapter = WindowsBluetoothAdapter.open(null)) {
+            assertNotNull(adapter.scan(Duration.ofSeconds(8)));
+        }
+    }
     @Test void windowsVisibilityCanBeAppliedRepeatedlyAndRestored() throws Exception {
         assumeTrue(Boolean.getBoolean("relay.hardwareTests") && WindowsRfcomm.isSupported(),
                 "Opt in to Windows visibility testing with -Drelay.hardwareTests=true");
@@ -57,6 +66,8 @@ class BluetoothServiceTest {
                 "Opt in to a real local Windows SDP check with -Drelay.hardwareTests=true");
         try (var adapter = WindowsBluetoothAdapter.open(null);
              var server = new WindowsRfcomm().listen(29)) {
+            assumeTrue(WindowsBluetoothService.findName(adapter.address()).isEmpty(),
+                    "Stop other Relay instances before the isolated local SDP registration check");
             String name = "SDP check [relay:local_sdp_test]";
             try (var service = new WindowsBluetoothService(adapter.address(), 29, name)) {
                 assertEquals(name, WindowsBluetoothService.findName(adapter.address()));
