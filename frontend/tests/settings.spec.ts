@@ -54,19 +54,13 @@ test("device name can be changed while the mesh service is stopped", async ({ pa
   await expect(page.getByText("Saved", { exact: true })).toBeVisible();
 });
 
-test("manual setup is tucked away and clears the password after saving", async ({ page }) => {
-  const calls = await mock(page);
+test("settings has no mesh creation or manual mesh form", async ({ page }) => {
+  await mock(page);
   await page.goto("/settings/");
-  await expect(page.getByLabel("Mesh password", { exact: true })).not.toBeVisible();
   await page.locator(".settings-advanced > summary").click();
-  await page.getByText("Set up a mesh manually", { exact: true }).click();
-  await page.getByLabel("Local network", { exact: true }).selectOption("192.168.1.20");
-  await page.getByLabel("Mesh password", { exact: true }).fill("test-mesh-password-123");
-  await page.getByRole("button", { name: "Save manual settings and reconnect" }).click();
-  await expect.poll(() => calls.length).toBe(2);
-  expect(calls.map(c => c.path)).toEqual(["/api/setup/apply", "/api/setup/restart"]);
-  await expect(page.getByLabel("Mesh password", { exact: true })).toHaveValue("");
-  expect(await page.evaluate(() => JSON.stringify(localStorage))).not.toContain("test-mesh-password-123");
+  await expect(page.getByText("Set up a mesh manually")).toHaveCount(0);
+  await expect(page.getByLabel("Mesh password", { exact: true })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: /Create mesh|Start a mesh/ })).toHaveCount(0);
 });
 
 test("leaving a mesh cannot be undone by the network repair control", async ({ page }) => {
@@ -87,9 +81,6 @@ test("preview settings do not read or change the live device", async ({ page }) 
   await page.goto("/settings/");
   await expect(page.getByRole("heading", { name: "This is a design preview" })).toBeVisible();
   await expect(page.getByRole("button", { name: "Use this connection", exact: true })).toBeDisabled();
-  await page.locator(".settings-advanced > summary").click();
-  await page.getByText("Set up a mesh manually", { exact: true }).click();
-  await expect(page.getByRole("button", { name: "Save manual settings and reconnect" })).toBeDisabled();
   expect(setupRequests).toBe(0);
 });
 

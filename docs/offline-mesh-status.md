@@ -4,7 +4,7 @@ This is a partial implementation of the requested Linux/Windows product, not a c
 
 ## Using the implemented controls
 
-Start the setup agent and open `http://localhost:6080`. Switch from Design preview to Live. Network map now offers Scan meshes, Create mesh, Join with a password, Leave mesh, and a Hotspot and Wi-Fi Direct panel. Names from UDP, Bluetooth device names and Wi-Fi Direct discovery are unverified. Successful password authentication is required before a carrier reaches mesh HELLO, routing, chat or file services.
+Start the setup agent and open `http://localhost:6080`. Switch from Design preview to Live. Network map now offers Scan nearby, Connect to a nearby device that is not in a mesh yet (choose or generate a password; the mesh is created and named automatically, and the owner can show the password to share under Mesh password), Join with a password, Leave mesh, and a Hotspot and Wi-Fi Direct panel. Names from UDP, Bluetooth device names and Wi-Fi Direct discovery are unverified. Successful password authentication is required before a carrier reaches mesh HELLO, routing, chat or file services.
 
 A device belongs to one configured mesh at a time; leave before switching. A mesh ID uses 1–80 letters/numbers/dots/underscores/hyphens. Mesh passwords contain 16–256 characters. Creating/joining enables visibility. The switch above the map also works before membership. Hiding withdraws discovery, leaves the mesh, pauses transfers and persists the left state; making the device visible again does not rejoin. A device without an active LAN address can create/join using Bluetooth with a loopback-only advertised IP setting. This does not turn a TCP socket into a Bluetooth link.
 

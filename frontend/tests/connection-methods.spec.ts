@@ -23,6 +23,7 @@ async function connectionFixture(page: Page, options: Options = {}) {
         { meshId: "Community", peerId: "A", kind: "lan", address: "192.168.20.4", peerPort: 5000, verified: false },
         { meshId: "Community", peerId: "A", kind: "bluetooth", address: "bt:AA:BB:CC:DD:EE:01", peerPort: 0, verified: false },
       ] : [], scanning: false, bluetoothAvailable: options.bluetooth !== false, discoveryError: options.noLan ? "No multicast-capable local network. Connect a LAN or hotspot." : "", error: "" },
+      "/api/discovery": { devices: [], meshes: options.joinCandidates ? [{ meshId: "Community", peerId: "A", address: "192.168.20.4", kind: "lan", verified: false }] : [], visibility: { deviceId: "Local", visible: false, bluetoothAvailable: true, bluetoothReason: "", error: "" } },
       "/api/setup/networks": { networks: options.noLan ? [] : [{ address: "192.168.20.3", label: "wlan0 — 192.168.20.3" }] },
       "/api/radio": { available: options.nativeAvailable !== false, reason: options.nativeAvailable === false ? "Native network service is unavailable on this platform" : "", state: options.ownedHotspot ? "ACTIVE" : "STOPPED", mode: options.ownedHotspot ? "hotspot" : "", adapters: options.nativeAvailable === false ? [] : [
         { path: "/wifi/1", name: "wlan0", type: "wifi", hotspotCapable: true }, { path: "/p2p/1", name: "p2p-wlan0", type: "wifi-direct", hotspotCapable: false },
@@ -38,15 +39,15 @@ test("shows combined nearby results while keeping connection settings separate",
   await page.goto("/");
   const methods = page.getByRole("region", { name: "Connection methods" });
   await expect(methods.getByRole("tab")).toHaveCount(4);
-  const nearby = page.getByRole("region", { name: "Nearby devices", exact: true });
-  await expect(nearby).toContainText("Bluetooth laptop");
-  await expect(nearby).toContainText("LAN desktop");
+  await expect(page.getByRole("region", { name: "Nearby devices", exact: true })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Inspect Bluetooth laptop" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Inspect LAN desktop" })).toBeVisible();
   await expect(page.getByText(/No multicast-capable/)).toHaveCount(0);
   await methods.getByRole("tab", { name: /Wi-Fi \/ LAN/ }).click();
   await expect(methods.getByRole("tabpanel")).toContainText("No multicast-capable");
   await expect(methods.getByRole("tabpanel")).toContainText("Bluetooth discovery is separate");
-  await expect(nearby).toContainText("LAN desktop");
-  await expect(nearby).toContainText("Bluetooth laptop");
+  await expect(page.getByRole("button", { name: "Inspect LAN desktop" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Inspect Bluetooth laptop" })).toBeVisible();
 });
 
 test("reports active transports separately from available adapters", async ({ page }) => {
@@ -55,7 +56,6 @@ test("reports active transports separately from available adapters", async ({ pa
   const methods = page.getByRole("region", { name: "Connection methods" });
   for (const label of [/^Bluetooth/, /^Hotspot/, /^Wi-Fi \/ LAN/]) await expect(methods.getByRole("tab", { name: label })).toContainText("1 active link");
   await expect(methods.getByRole("tab", { name: /^Wi-Fi Direct/ })).toContainText("Available");
-  await expect(page.getByText("Active links: Bluetooth · Hotspot · TCP")).toBeVisible();
   await methods.getByRole("tab", { name: /^Hotspot/ }).click();
   await expect(methods.getByRole("tabpanel")).toContainText("Running");
   await expect(methods.getByLabel("Hotspot password", { exact: true })).toHaveCount(0);
@@ -120,8 +120,8 @@ test("one peer with multiple candidate transports has a single map node", async 
 test("a discovered mesh groups its transports and joins the explicitly selected candidate", async ({ page }) => {
   const posts = await connectionFixture(page, { joinCandidates: true });
   await page.goto("/");
-  await expect(page.getByRole("button", { name: "Join mesh Community" })).toHaveCount(1);
-  await page.getByRole("button", { name: "Join mesh Community" }).click();
+  await page.getByRole("button", { name: "Inspect Community" }).click();
+  await page.getByRole("button", { name: "Join Community", exact: true }).click();
   await page.getByRole("button", { name: /Bluetooth Found this mesh/ }).click();
   await expect(page.getByLabel("Mesh local network", { exact: true })).toHaveCount(0);
   await page.getByLabel("Mesh password", { exact: true }).fill("mesh-only-candidate-password");
@@ -171,7 +171,10 @@ test("one top scan checks local network, Bluetooth and supported Wi-Fi Direct wi
   await expect.poll(() => networkReads).toBeGreaterThan(previousReads);
   const scan = await sidebar.locator(".nearby-scan-card").boundingBox();
   const device = await sidebar.locator(".map-visibility").boundingBox();
-  expect(scan!.y).toBeLessThan(device!.y);
+  const setup = await sidebar.getByRole("region", { name: "Connection methods" }).boundingBox();
+  // Sidebar order: device visibility, then connection setup, then Scan nearby.
+  expect(device!.y).toBeLessThan(setup!.y);
+  expect(setup!.y).toBeLessThan(scan!.y);
 });
 
 test("nearby scan still searches the LAN when Bluetooth and native radio support are unavailable", async ({ page }) => {

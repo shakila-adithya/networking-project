@@ -9,8 +9,10 @@ test("navigation owns Settings and the preview switch, with no duplicate footer"
   await expect(page.locator(".mode-control")).toHaveCount(0);
   await expect(page.getByRole("group", { name: "Map controls" })).toBeVisible();
   const sidebar = page.locator(".network-inspector");
-  expect(await sidebar.evaluate(element => getComputedStyle(element).overflowY)).toBe("auto");
-  expect(await sidebar.evaluate(element => element.scrollHeight > element.clientHeight)).toBeTruthy();
+  // Map and sidebar share one height and end on the same line.
+  const mapBox = (await page.locator(".topology").boundingBox())!, sideBox = (await sidebar.boundingBox())!;
+  expect(Math.abs(mapBox.y - sideBox.y)).toBeLessThan(1);
+  expect(Math.abs(mapBox.y + mapBox.height - (sideBox.y + sideBox.height))).toBeLessThan(1);
   await page.setViewportSize({ width: 390, height: 844 });
   expect(await sidebar.evaluate(element => element.scrollHeight <= element.clientHeight + 1)).toBeTruthy();
   await expect(nav.getByRole("link", { name: "Settings", exact: true })).toBeVisible();

@@ -5,7 +5,7 @@ test("all exported routes load with complete assets and correct icon geometry", 
 }) => {
   const errors: string[] = [];
   page.on("pageerror", (e) => errors.push(e.message));
-  for (const route of ["/", "/messages/", "/files/", "/device/", "/settings/"]) {
+  for (const route of ["/", "/messages/", "/files/", "/device/", "/settings/", "/how-it-works/"]) {
     await page.goto(route);
     await expect(
       page.getByRole("navigation", { name: "Main navigation" }),
@@ -269,8 +269,8 @@ test("live mode shows the real transport and nearby Bluetooth devices", async ({
     }),
   );
   await page.goto("/");
-  await expect(page.getByRole("banner").locator(".connection")).toContainText("Offline mesh");
-  await expect(page.getByText("1 Relay device discovered")).toBeVisible();
+  await expect(page.getByRole("banner").locator(".connection")).toHaveCount(0);
+  await expect(page.getByText("NEARBY DEVICES", { exact: true })).toHaveCount(0);
 });
 
 // ---- My device, visibility and nearby devices ----
@@ -408,7 +408,7 @@ test("visibility remains available for LAN when Bluetooth is unavailable", async
   await expect(page.locator(".map-visibility").getByText(/Bluetooth is turned off/)).toBeVisible();
 });
 
-test("nearby devices can be scanned, analysed and connected from the map", async ({ page }) => {
+test("nearby devices are scanned and connected from the map, not a list", async ({ page }) => {
   const posts = await mockNode(page, { ...baseDevice }, [
     { kind: "bluetooth", deviceId: "A", name: "Amaya's phone", address: "bt:AA:BB:CC:DD:EE:01", signal: 80, rssi: -60, relay: true, state: "CONNECTED", error: "", hops: 1 },
     { kind: "bluetooth", deviceId: "B", name: "Basil's laptop", address: "bt:AA:BB:CC:DD:EE:02", signal: 50, rssi: -75, relay: true, state: "AVAILABLE", error: "", hops: null },
@@ -416,19 +416,10 @@ test("nearby devices can be scanned, analysed and connected from the map", async
     { kind: "bluetooth", deviceId: null, name: "soundcore R60i NC", address: "bt:34:09:C9:B1:39:88", signal: null, rssi: null, relay: false, state: "OTHER", error: "", hops: null },
   ]);
   await page.goto("/");
-  const panel = page.getByRole("region", { name: "Nearby devices" });
-  await expect(panel.getByText("Amaya's phone")).toBeVisible();
-  await expect(panel.getByText("Connected", { exact: true })).toBeVisible();
-  // devices that do not run Relay are tucked away in a collapsed group
-  await expect(panel.getByText(/not a Relay device/)).toBeHidden();
-  await panel.getByText(/Other Bluetooth devices \(1\)/).click();
-  await expect(panel.getByText(/not a Relay device/)).toBeVisible();
-  await expect(panel.getByRole("button", { name: /Connect to soundcore/ })).toHaveCount(0); // cannot connect to non-Relay devices
-  await expect(panel.getByText(/refused the connection/)).toBeVisible(); // the failure reason is shown
-  await expect(panel.getByRole("button", { name: "Retry connecting to Dani" })).toBeVisible();
-
+  await expect(page.getByRole("region", { name: "Nearby devices" })).toHaveCount(0);
   await page.getByRole("button", { name: "Scan nearby", exact: true }).click();
-  await panel.getByRole("button", { name: "Connect to Basil's laptop" }).click();
+  await page.getByRole("button", { name: "Inspect Basil's laptop" }).click();
+  await page.locator(".connect-card").getByRole("button", { name: "Connect" }).click();
   expect(posts).toEqual([
     { path: "/api/membership/scan", body: {} },
     { path: "/api/mesh/connect", body: { deviceId: "B", candidateAddress: "bt:AA:BB:CC:DD:EE:02" } },
@@ -459,8 +450,6 @@ test("the design preview works without a node: name, visibility, scan and connec
   await page.getByRole("button", { name: "Reset inspector" }).click();
   await page.getByRole("button", { name: "Scan nearby", exact: true }).click();
   await expect(page.getByRole("button", { name: "Scanning…" })).toBeVisible();
-  await page.getByRole("button", { name: "Connect to Zara" }).click();
-  await expect(page.getByText("Connected", { exact: true }).nth(1)).toBeVisible();
 });
 
 test("selecting this device before its live ID loads keeps the visibility inspector open", async ({ page }) => {
@@ -477,4 +466,17 @@ test("selecting this device before its live ID loads keeps the visibility inspec
   release();
   await expect(page.locator(".map-visibility").getByText(/Bluetooth is turned off/)).toBeVisible();
   await expect(page.getByRole("switch", { name: "Visible to nearby devices" })).toBeEnabled();
+});
+
+test("How Relay works is its own page and the navigation stays centred", async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await page.goto("/");
+  await expect(page.getByRole("heading", { name: "Chat and share files with no internet" })).toHaveCount(0);
+  const nav = page.getByRole("navigation", { name: "Main navigation" });
+  const box = (await nav.boundingBox())!;
+  expect(Math.abs(box.x + box.width / 2 - 720)).toBeLessThan(40);
+  await nav.getByRole("link", { name: "How Relay works" }).click();
+  await expect(page).toHaveURL(/how-it-works/);
+  await expect(page.getByRole("heading", { name: "Chat and share files with no internet" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Ways to connect" })).toBeVisible();
 });

@@ -238,5 +238,9 @@
   "settings-icon": {
     "width": 18,
     "height": 18
+  },
+  "guide-icon": {
+    "width": 18,
+    "height": 18
   }
 }

@@ -63,7 +63,7 @@ export function ConnectionMethods(props: Props) {
   </label>;
   const nativeState = native?.state === "ACTIVE" ? "Running" : native?.state === "STARTING" ? "Starting…" : native?.state === "FAILED" || native?.state === "ERROR" ? "Needs attention" : "Stopped";
   return <section className="connection-methods" aria-label="Connection methods">
-    <div className="connection-section-heading"><div><h3>Connection setup</h3><p>Set up a link if the mesh is not reachable yet.</p></div></div>
+    <div className="connection-section-heading"><div><h3>Connection setup</h3><p>Choose how this device connects, then press Scan nearby.</p></div></div>
     <div className="connection-tabs" role="tablist" aria-label="Connection method">
       {methods.map((item, index) => <button type="button" role="tab" tabIndex={method === item.id ? 0 : -1} onKeyDown={event => {
         const offset = ({ ArrowRight: 1, ArrowLeft: -1, ArrowDown: 2, ArrowUp: -2 } as Record<string, number>)[event.key];
