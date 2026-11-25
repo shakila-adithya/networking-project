@@ -94,9 +94,10 @@ for (const legacy of [false, true]) {
     await expect(ready).toContainText("Ready to join a mesh");
     await expect(page.locator(".connection-notice")).toHaveCount(0);
     await expect(page.locator(".api-error")).toHaveCount(0);
-    const notice = page.locator(".connection-notice");
-    await page.getByRole("navigation", { name: "Main navigation" }).getByRole("link", { name: "Messages", exact: true }).click();
-    await expect(notice.getByRole("link", { name: /Open Network map/ })).toBeVisible();
+    for (const name of ["Messages", "Share files", "Settings", "How Relay works"]) {
+      await page.getByRole("navigation", { name: "Main navigation" }).getByRole("link", { name, exact: true }).click();
+      await expect(page.locator(".connection-notice")).toHaveCount(0);
+    }
     await page.setViewportSize({ width: 390, height: 844 });
     expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(390);
   });

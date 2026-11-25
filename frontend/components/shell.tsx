@@ -77,10 +77,9 @@ function Chrome({ children }: { children: React.ReactNode }) {
         </nav>
         <span className="header-spacer" aria-hidden="true" />
       </header>
-      {!preview && connectionNotice && !(connectionNotice === "not-joined" && path === "/") && <div className="connection-notice" role="status">
+      {!preview && connectionNotice === "starting" && <div className="connection-notice" role="status">
         <span className="connection-notice-icon" aria-hidden="true"><ConnectionGlyph kind="mesh" /></span>
-        <div><strong>{connectionNotice === "starting" ? "Connecting to your mesh" : "Ready to join a mesh"}</strong><p>{connectionNotice === "starting" ? "Relay is starting your connections. Your network status will update shortly." : path === "/" ? "Choose a nearby mesh or create your own using the sidebar." : "Open the Network map to find a nearby mesh or create your own."}</p></div>
-        {connectionNotice === "not-joined" && path !== "/" && <Link className="button secondary" href="/">Open Network map <span aria-hidden="true">↗</span></Link>}
+        <div><strong>Connecting to your mesh</strong><p>Relay is starting your connections. Your network status will update shortly.</p></div>
       </div>}
       {!preview && error && (
         <div className="api-error" role="alert">
