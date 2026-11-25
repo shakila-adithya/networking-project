@@ -1,6 +1,45 @@
 import { test, expect, Page } from "@playwright/test";
 
 const settings = { peerId: "laptop-A", clusterId: "family-mesh", address: "192.168.1.9", peerPort: 5010, restPort: 6010, discoveryGroup: "239.255.42.99", discoveryPort: 45555 };
+
+test("device ID can be changed in Settings before joining a mesh", async ({ page }) => {
+  await mock(page, "UNCONFIGURED");
+  let deviceId = "laptop-A";
+  let submitted: unknown;
+  await page.route("**/api/setup/device", route => route.fulfill({ json: { deviceId, customName: "My laptop" } }));
+  await page.route("**/api/setup/identity", route => {
+    submitted = route.request().postDataJSON();
+    deviceId = route.request().postDataJSON().deviceId;
+    return route.fulfill({ json: { deviceId, restarting: false, message: "Device ID saved. Your files and mesh settings are kept." } });
+  });
+  await page.goto("/settings/");
+  await expect(page.getByLabel("Device ID", { exact: true })).toHaveValue("laptop-A");
+  await page.getByLabel("Device ID", { exact: true }).fill("Windows_PC_2");
+  await page.getByRole("button", { name: "Save device ID" }).click();
+  await expect(page.getByRole("status").filter({ hasText: "Device ID saved" })).toBeVisible();
+  expect(submitted).toEqual({ deviceId: "Windows_PC_2" });
+  await expect(page.getByLabel("Device ID", { exact: true })).toHaveValue("Windows_PC_2");
+  await expect(page.locator(".device-identity code")).toHaveText("Windows_PC_2");
+  await expect(page.getByRole("button", { name: "Save device ID" })).toBeDisabled();
+  await page.screenshot({ path: "test-results/device-id-settings-desktop.png", fullPage: true });
+  await page.setViewportSize({ width: 390, height: 844 });
+  expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(390);
+  await page.screenshot({ path: "test-results/device-id-settings-mobile.png", fullPage: true });
+});
+
+test("device ID rejects invalid input and displays duplicate errors", async ({ page }) => {
+  await mock(page, "UNCONFIGURED");
+  await page.route("**/api/setup/identity", route => route.fulfill({ status: 400, json: { message: "That device ID is already used by another known device. Choose a different ID." } }));
+  await page.goto("/settings/");
+  const input = page.getByLabel("Device ID", { exact: true });
+  await expect(input).toHaveValue("laptop-A");
+  await input.fill("invalid id");
+  await expect(page.getByRole("button", { name: "Save device ID" })).toBeDisabled();
+  await input.fill("laptop-B");
+  await page.getByRole("button", { name: "Save device ID" }).click();
+  await expect(page.getByRole("alert").filter({ hasText: "already used" })).toBeVisible();
+  await expect(input).toHaveValue("laptop-B");
+});
 async function mock(page: Page, phase = "ERROR", running = false) {
   const calls: { path: string; body: unknown }[] = [];
   await page.addInitScript(() => localStorage.setItem("relay-mode", "live"));

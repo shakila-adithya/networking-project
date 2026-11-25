@@ -357,7 +357,9 @@ public final class MeshNode implements AutoCloseable {
         NeighbourLink best = links.values().stream().filter(n -> n.link().isOpen())
                 .min(java.util.Comparator.comparingInt(n -> measuredCost(peer, n))).orElse(null);
         NeighbourLink current = neighbours.get(peer);
-        if (current == null || !current.link().isOpen()) { if (best == null) neighbours.remove(peer); else neighbours.put(peer, best); improvement.remove(peer); improvementSince.remove(peer); return; }
+        // A tie-break can replace a still-open link of the same kind. It is no longer
+        // eligible once removed from this peer's carriers, even before close() runs.
+        if (current == null || !current.link().isOpen() || !links.containsValue(current)) { if (best == null) neighbours.remove(peer); else neighbours.put(peer, best); improvement.remove(peer); improvementSince.remove(peer); return; }
         if (best != current && best != null && measuredCost(peer, best) <= .8 * measuredCost(peer, current)) {
             String key = best.link().kind();
             if (!key.equals(improvement.get(peer))) { improvement.put(peer, key); improvementSince.put(peer, System.nanoTime()); }

@@ -26,3 +26,5 @@ backend/config/bluetooth-restore.properties
 backend/config/device-profile.json
 
 backend/config/local-setup.json.left
+backend/config/device-id.txt
+backend/config/.identity-*.tmp

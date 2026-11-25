@@ -19,6 +19,8 @@ The interface includes Network map, Messages, Share files, and Settings (includi
 
 ## Build and start
 
+Use the **Light mode / Dark mode** switch in the header to change the interface theme. The preference is saved in this browser and applies to every page. On first use, Relay follows the operating system's light/dark preference.
+
 Requirements: JDK 25 and Node.js 24. Maven and frontend dependencies may require internet access during the initial build. Once built, the Java backend serves the static frontend; a Node server is unnecessary.
 
 From the repository root on Linux/macOS:
@@ -51,6 +53,10 @@ npm --prefix frontend run build
 On Windows, run Maven commands from `backend/` using `.\mvnw.cmd`. Use the frontend npm commands from the root or `frontend/`. See [frontend guide](frontend/README.md) for development and browser tests.
 
 ## Configure devices
+
+Device IDs can be changed in **Settings → Your device ID → Save device ID**. Choose 1–40 letters, numbers, underscores or hyphens, for example `Windows_PC_2`. The app rejects IDs used by known peers and nearby devices, preserves received-file paths and the mesh password, and reconnects an active local node automatically. Changing an ID interrupts current transfers. Offline or hidden devices cannot be checked, so choose different IDs on every computer.
+
+New installations generate a unique local identity automatically. `backend/config/device-id.txt` is machine-specific and is excluded from Git; existing local identity files are preserved. When copying an entire installation rather than cloning the repository, use the Settings editor to change any copied ID. Saved mesh configuration remains authoritative after joining.
 
 Each device needs a unique peer ID, its own reachable advertised address, a TCP file-service port, and a local storage directory. Mesh members use a shared mesh ID and password. Public discovery is unverified; every application carrier authenticates with J-PAKE and TLS. See [joining through Settings](docs/join-device-C.md).
 

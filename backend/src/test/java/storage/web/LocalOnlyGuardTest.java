@@ -53,7 +53,7 @@ class LocalOnlyGuardTest {
                 assertEquals(503, status(port, "POST", path, local, "{}"),
                         "this laptop passes the guard (and finds no running node here): " + path);
             }
-            for (String path : List.of("/api/setup/device", "/api/setup/network"))
+            for (String path : List.of("/api/setup/device", "/api/setup/network", "/api/setup/identity"))
                 assertEquals(403, status(port, "POST", path, foreign, "{}"));
             assertEquals(403, status(port, "GET", "/api/setup/device", foreign, ""));
             // Device APIs are local too: remote pages must not inspect or change local connection state.

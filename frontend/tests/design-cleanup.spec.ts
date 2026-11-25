@@ -23,6 +23,7 @@ test("navigation owns Settings and the preview switch, with no duplicate footer"
 });
 
 test("file picking has one control and messages use a green Delivered pill without the shared-files shortcut", async ({ page }) => {
+  await page.emulateMedia({ colorScheme: "dark" });
   await page.goto("/files/");
   await expect(page.getByRole("button", { name: "Add more", exact: true })).toHaveCount(0);
   await expect(page.locator(".dropzone")).toHaveCount(1);

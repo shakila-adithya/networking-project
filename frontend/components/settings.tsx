@@ -4,6 +4,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { request, useMesh } from "@/lib/mesh";
 import { RelayStorageSettings } from "./relay-storage-settings";
 import { MyDevice } from "./my-device";
+import { DeviceIdSettings } from "./device-id-settings";
 import { Eyebrow } from "./ui";
 
 type Network = { address: string; label: string };
@@ -13,6 +14,7 @@ const post = (path: string, body: object) => request(`/setup/${path}`, { method:
 
 export function Settings() {
   const { preview } = useMesh();
+  const [identityRevision, setIdentityRevision] = useState(0);
   const live = useRef(!preview);
   live.current = !preview;
   const [status, setStatus] = useState<Status | null>(null);
@@ -110,7 +112,7 @@ export function Settings() {
     {preview && <div className="settings-notice" role="status">Design preview · Nothing here changes a real device. Use the live network switch in the navigation to manage your connections.</div>}
     {loadError && <p className="settings-notice bad" role="alert">{loadError}</p>}
     <div className="settings-grid">
-      <div className="settings-card"><MyDevice embedded /></div>
+      <div className="settings-card"><MyDevice embedded identityRevision={identityRevision} /><DeviceIdSettings onSaved={() => setIdentityRevision(value => value + 1)} /></div>
       <section className="settings-card settings-connection" aria-labelledby="connection-title">
         <Eyebrow>YOUR CONNECTION</Eyebrow><h2 id="connection-title">{connection[0]}</h2><p>{connection[1]}</p>
         {status?.settings && <dl className="settings-facts"><div><dt>{left || phase === "ERROR" ? "Last saved mesh" : "Mesh name"}</dt><dd>{status.settings.clusterId}</dd></div><div><dt>Device ID</dt><dd>{status.settings.peerId}</dd></div></dl>}

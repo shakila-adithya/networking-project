@@ -82,18 +82,29 @@ public final class BlueZAdapter implements LocalBluetooth {
         return advertising;
     }
 
+    @Override public String discoveryLimitation() { return LinuxBluetoothService.limitation(); }
+
     @Override
     public List<Nearby> scan(Duration duration) throws IOException {
         try {
             List<Nearby> found = new ArrayList<>();
+            long deadline = System.nanoTime() + duration.toNanos() + Duration.ofSeconds(4).toNanos();
             for (BluetoothDevice device : manager.scanForBluetoothDevices((int) Math.max(1_000, duration.toMillis()))) {
                 String name = device.getName();
                 if (name == null || name.isBlank()) {
                     name = device.getAlias();
                 }
                 Short rssi = device.getRssi();
-                found.add(new Nearby(device.getAddress().toUpperCase(Locale.ROOT), name,
-                        rssi == null ? null : rssi.intValue(), Boolean.TRUE.equals(device.isPaired())));
+                Nearby nearby = new Nearby(device.getAddress().toUpperCase(Locale.ROOT), name,
+                        rssi == null ? null : rssi.intValue(), Boolean.TRUE.equals(device.isPaired()));
+                if (nearby.relayDeviceId().isEmpty() && System.nanoTime() < deadline) {
+                    try {
+                        var identity = LinuxBluetoothService.findName(nearby.address(),
+                                Duration.ofNanos(Math.min(Duration.ofSeconds(4).toNanos(), deadline - System.nanoTime())));
+                        if (identity.isPresent()) nearby = new Nearby(nearby.address(), identity.get(), nearby.rssi(), nearby.paired());
+                    } catch (IOException e) { System.err.println(e.getMessage()); }
+                }
+                found.add(nearby);
             }
             return found;
         } catch (RuntimeException e) {

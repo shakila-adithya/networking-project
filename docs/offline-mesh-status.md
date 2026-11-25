@@ -1,6 +1,6 @@
 # Offline mesh implementation and verification
 
-This is a partial implementation of the requested Linux/Windows product, not a claim of completed hardware interoperability. A Windows Bluetooth Classic adapter (Winsock RFCOMM plus radio inquiry/visibility) is now written but has never run on Windows. Windows Wi-Fi Direct/Mobile Hotspot adapters and pre-connection Wi-Fi Direct mesh advertisements are still missing. Linux native radio operations also require two-device validation.
+This is a partial implementation of the requested Linux/Windows product, not a claim of completed hardware interoperability. Windows Bluetooth Classic includes Winsock RFCOMM, radio inquiry/visibility and SDP service identity publication/lookup. Windows Wi-Fi Direct/Mobile Hotspot adapters and pre-connection Wi-Fi Direct mesh advertisements are still missing. Both radio platforms require two-device validation.
 
 ## Using the implemented controls
 
@@ -16,7 +16,7 @@ Starting/stopping a radio connection requires acknowledging the current-Wi-Fi di
 
 `BluetoothPlatform` picks the implementation by OS. `WindowsRfcomm` implements `RfcommApi` with Winsock `AF_BTH` RFCOMM sockets through FFM (ws2_32.dll, no extra library), with the same close/shutdown safety as the Linux version and a thread-enforced connect timeout. `WindowsBluetoothAdapter` implements `LocalBluetooth`: radio address via `bthprops.cpl`, nearby-device inquiry via Winsock `NS_BTH` lookup, and discoverable/connectable switching restored on close. Everything above the seam (mesh, security, routing, UI) is unchanged.
 
-Known gaps: Windows has no public API to rename the local radio, so a Windows device cannot publish the `[relay:id] [mesh:id]` name tags that Linux peers use to recognise Relay devices. Windows can find Linux Relay devices, but Linux will not list a Windows device by Bluetooth scan; closing this needs an SDP service record or a different discovery path. Inquiry reports no RSSI or pairing state. The code compiled and its address/struct packing is unit-tested on Linux; no socket call has run on Windows.
+Windows now publishes `[relay:id] [mesh:id]` in an SDP service name rather than changing the radio name. Windows scans query this service on untagged radios; updated Linux scans use BlueZ `sdptool` to read it. Old Linux builds that only inspect radio names must update. Service records remain unverified hints; J-PAKE/TLS still authenticates application links. Inquiry reports no RSSI or pairing state. Regression tests cover native structure packing and SDP parsing. On 2026-11-25, all three `BluetoothServiceTest` checks passed on Windows with an Intel Bluetooth radio, including real local SDP registration/query/removal and an RFCOMM listen/accept timeout. An earlier error 259 was traced to the Windows Bluetooth radio being switched off; enabling it allowed the hardware check to pass. A link between two physical devices remains unverified. Restart Relay after enabling a radio that was off at application startup. See [Bluetooth setup](bluetooth.md).
 
 ## Security and protocol migration
 

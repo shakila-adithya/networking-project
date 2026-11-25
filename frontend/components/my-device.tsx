@@ -7,7 +7,7 @@ import { Avatar, Eyebrow } from "./ui";
 const MAX_NAME = 32;
 
 // "My device": the name other people see. Visibility is controlled above the Network map.
-export function MyDevice({ embedded = false }: { embedded?: boolean }) {
+export function MyDevice({ embedded = false, identityRevision = 0 }: { embedded?: boolean; identityRevision?: number }) {
   const { preview, device, saveDevice } = useMesh();
   const [localName, setLocalName] = useState<{ deviceId: string; customName: string } | null>(null);
   const [nameLoadError, setNameLoadError] = useState("");
@@ -17,7 +17,7 @@ export function MyDevice({ embedded = false }: { embedded?: boolean }) {
     request("/setup/device").then(data => { if (alive) { setLocalName(data); setNameLoadError(""); } })
       .catch(() => { if (alive) setNameLoadError("Can't load your device name. Restart Relay, then refresh this page."); });
     return () => { alive = false; };
-  }, [preview, device]);
+  }, [preview, device, identityRevision]);
   const profile = device || (!preview ? localName : null);
   const saved = profile?.customName ?? "";
   const [name, setName] = useState(saved),

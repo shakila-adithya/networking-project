@@ -54,9 +54,11 @@ test("file selection survives resetting the file input and produces preview acti
 
 test("preview messaging and client navigation work", async ({ page }) => {
   await page.goto("/messages/");
-  await page
-    .getByRole("textbox", { name: "Message", exact: true })
-    .fill("Browser smoke check");
+  // The static export can show the input before React has attached its change handler.
+  await expect(async () => {
+    await page.getByRole("textbox", { name: "Message", exact: true }).fill("Browser smoke check");
+    await expect(page.getByRole("button", { name: "Send message", exact: true })).toBeEnabled({ timeout: 1000 });
+  }).toPass({ timeout: 5000 });
   await page.getByRole("button", { name: "Send message", exact: true }).click();
   await expect(
     page.getByText("Browser smoke check", { exact: true }),
@@ -303,6 +305,7 @@ async function mockNode(page: import("@playwright/test").Page, device: Device, n
     r.fulfill({ json: { deviceId: "C", deviceName: device.displayName, names: {}, transport: "tcp+bluetooth", neighbours: [], routes: [], inbox: [] } }),
   );
   const posts: { path: string; body: unknown }[] = [];
+  await page.route("**/api/setup/device", r => r.fulfill({ json: { deviceId: device.deviceId, customName: device.customName, displayName: device.displayName } }));
   await page.route("**/api/membership", r => r.fulfill({ json: { meshId: "Community", phase: "DISCOVERING", nearby: [], bluetoothAvailable: true, scanning: false, error: "", discoveryError: "" } }));
   await page.route("**/api/membership/scan", r => {
     posts.push({ path: "/api/membership/scan", body: r.request().postDataJSON() });
@@ -359,7 +362,7 @@ test("My device lets the user set the name and offers no visibility control", as
   ).toHaveClass(/active/);
   await expect(page.locator(".device-identity small")).toContainText("Device ID");
   // visibility lives on the Network map, not here
-  await expect(page.getByRole("switch")).toHaveCount(0);
+  await expect(page.getByRole("switch", { name: "Visible to nearby devices" })).toHaveCount(0);
   await expect(page.getByText(/use the visibility switch/)).toBeVisible();
 
   const save = page.getByRole("button", { name: "Save", exact: true });
@@ -375,6 +378,7 @@ test("My device lets the user set the name and offers no visibility control", as
 test("My device refuses a name that is too long and shows the node's error", async ({ page }) => {
   const posts = await mockNode(page, { ...baseDevice });
   await page.goto("/settings/");
+  await expect(page.locator(".device-identity code")).toHaveText("C");
   await page.getByLabel("Device name").fill("x".repeat(33));
   await expect(page.getByText("33/32 characters")).toBeVisible();
   await expect(page.getByRole("button", { name: "Save", exact: true })).toBeDisabled();
@@ -385,7 +389,7 @@ test("visibility is always available on the map and hiding warns that it leaves 
   const device = { ...baseDevice, customName: "Maya's laptop", displayName: "Maya's laptop" };
   const posts = await mockNode(page, device);
   await page.goto("/");
-  await expect(page.getByRole("switch")).toHaveCount(1); // no map selection is needed
+  await expect(page.getByRole("switch", { name: "Visible to nearby devices" })).toHaveCount(1); // no map selection is needed
   await page.getByRole("button", { name: "Inspect Maya's laptop" }).click();
   const toggle = page.getByRole("switch", { name: "Visible to nearby devices" });
   await expect(toggle).toHaveAttribute("aria-checked", "false");

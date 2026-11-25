@@ -22,10 +22,8 @@ import static java.lang.foreign.ValueLayout.JAVA_LONG;
  * The local Windows Bluetooth radio: address and visibility through bthprops.cpl, device inquiry through Winsock's
  * {@code NS_BTH} name space. Companion of {@link WindowsRfcomm}.
  *
- * <p>Windows has no public API to rename the local radio, so unlike {@link BlueZAdapter} this adapter cannot publish the
- * {@code [relay:id] [mesh:id]} tags in the Bluetooth name. {@link #advertise} makes the radio discoverable and connectable
- * only; Linux peers recognise Relay devices by those name tags and will therefore not list a Windows device until it is
- * reached some other way. Windows can still discover Linux Relay devices. Not hardware-verified (compiled on Linux only).
+ * <p>Windows publishes Relay identity in an SDP service record instead of renaming the radio.
+ * Inquiry finds radios; an SDP lookup then identifies Relay on radios without a Relay name.
  */
 public final class WindowsBluetoothAdapter implements LocalBluetooth {
     private static final int NS_BTH = 16;
@@ -38,19 +36,23 @@ public final class WindowsBluetoothAdapter implements LocalBluetooth {
 
     private static final class Api {
         static final Linker LINKER = Linker.nativeLinker();
+        static final java.lang.foreign.StructLayout STATE = Linker.Option.captureStateLayout();
+        static final java.lang.invoke.VarHandle LAST_ERROR = STATE.varHandle(java.lang.foreign.MemoryLayout.PathElement.groupElement("GetLastError"));
         static final MethodHandle FIND_FIRST_RADIO, FIND_RADIO_CLOSE, GET_RADIO_INFO, IS_DISCOVERABLE, ENABLE_DISCOVERY,
-                ENABLE_INCOMING, CLOSE_HANDLE, LOOKUP_BEGIN, LOOKUP_NEXT, LOOKUP_END, WSA_ERROR;
+                ENABLE_INCOMING, IS_CONNECTABLE, CLOSE_HANDLE, LOOKUP_BEGIN, LOOKUP_NEXT, LOOKUP_END, WSA_ERROR;
 
         static {
             SymbolLookup bth = SymbolLookup.libraryLookup("bthprops.cpl", Arena.global());
             SymbolLookup k32 = SymbolLookup.libraryLookup("kernel32", Arena.global());
             SymbolLookup ws2 = SymbolLookup.libraryLookup("ws2_32", Arena.global());
-            FIND_FIRST_RADIO = h(bth, "BluetoothFindFirstRadio", FunctionDescriptor.of(ADDRESS, ADDRESS, ADDRESS));
+            FIND_FIRST_RADIO = LINKER.downcallHandle(bth.find("BluetoothFindFirstRadio").orElseThrow(),
+                    FunctionDescriptor.of(ADDRESS, ADDRESS, ADDRESS), Linker.Option.captureCallState("GetLastError"));
             FIND_RADIO_CLOSE = h(bth, "BluetoothFindRadioClose", FunctionDescriptor.of(JAVA_INT, ADDRESS));
             GET_RADIO_INFO = h(bth, "BluetoothGetRadioInfo", FunctionDescriptor.of(JAVA_INT, ADDRESS, ADDRESS));
             IS_DISCOVERABLE = h(bth, "BluetoothIsDiscoverable", FunctionDescriptor.of(JAVA_INT, ADDRESS));
-            ENABLE_DISCOVERY = h(bth, "BluetoothEnableDiscovery", FunctionDescriptor.of(JAVA_INT, ADDRESS, JAVA_INT));
-            ENABLE_INCOMING = h(bth, "BluetoothEnableIncomingConnections", FunctionDescriptor.of(JAVA_INT, ADDRESS, JAVA_INT));
+            ENABLE_DISCOVERY = hWithError(bth, "BluetoothEnableDiscovery");
+            ENABLE_INCOMING = hWithError(bth, "BluetoothEnableIncomingConnections");
+            IS_CONNECTABLE = h(bth, "BluetoothIsConnectable", FunctionDescriptor.of(JAVA_INT, ADDRESS));
             CLOSE_HANDLE = h(k32, "CloseHandle", FunctionDescriptor.of(JAVA_INT, ADDRESS));
             LOOKUP_BEGIN = h(ws2, "WSALookupServiceBeginW", FunctionDescriptor.of(JAVA_INT, ADDRESS, JAVA_INT, ADDRESS));
             LOOKUP_NEXT = h(ws2, "WSALookupServiceNextW", FunctionDescriptor.of(JAVA_INT, ADDRESS, JAVA_INT, ADDRESS, ADDRESS));
@@ -62,6 +64,10 @@ public final class WindowsBluetoothAdapter implements LocalBluetooth {
             return LINKER.downcallHandle(lookup.find(name).orElseThrow(
                     () -> new UnsatisfiedLinkError(name + " is missing")), descriptor);
         }
+        static MethodHandle hWithError(SymbolLookup lookup, String name) {
+            return LINKER.downcallHandle(lookup.find(name).orElseThrow(),
+                    FunctionDescriptor.of(JAVA_INT, ADDRESS, JAVA_INT), Linker.Option.captureCallState("GetLastError"));
+        }
     }
 
     private final MemorySegment radio; // HANDLE, owned for the adapter's lifetime
@@ -69,11 +75,50 @@ public final class WindowsBluetoothAdapter implements LocalBluetooth {
     private final String radioName;
     private final Path restoreFile;
     private final boolean wasDiscoverable;
+    private final boolean wasConnectable;
     private boolean advertising;
+    private WindowsBluetoothService service;
+    private String advertisedName = "";
+    private volatile String scanError = "";
+    private final RadioState connectable = new ConnectableState();
+    private final RadioState discoverable = new DiscoverableState();
 
-    private WindowsBluetoothAdapter(MemorySegment radio, String address, String radioName, boolean wasDiscoverable, Path restoreFile) {
+    /** BOOL reports whether Windows changed a state; an already-correct state is also success. */
+    interface RadioState {
+        boolean get() throws Throwable;
+        int set(boolean enabled) throws Throwable;
+    }
+    static void ensureState(RadioState state, boolean enabled, String label) throws IOException {
+        try {
+            if (state.get() == enabled) return;
+            int error = state.set(enabled);
+            if (state.get() != enabled)
+                throw new IOException("Windows could not " + (enabled ? "enable " : "disable ") + label
+                        + (error == 0 ? "" : " (Windows error " + error + ")"));
+        } catch (IOException e) { throw e; }
+        catch (Throwable e) { throw new IOException("Could not update " + label + ": " + e, e); }
+    }
+    private int setRadioState(MethodHandle function, boolean enabled) throws Throwable {
+        try (Arena arena = Arena.ofConfined()) {
+            MemorySegment state = arena.allocate(Api.STATE);
+            int changed = (int) function.invokeExact(state, radio, enabled ? 1 : 0);
+            return changed == 0 ? (int) Api.LAST_ERROR.get(state, 0L) : 0;
+        }
+    }
+    private final class ConnectableState implements RadioState {
+        public boolean get() throws Throwable { return (int) Api.IS_CONNECTABLE.invokeExact(radio) != 0; }
+        public int set(boolean enabled) throws Throwable { return setRadioState(Api.ENABLE_INCOMING, enabled); }
+    }
+    private final class DiscoverableState implements RadioState {
+        public boolean get() throws Throwable { return (int) Api.IS_DISCOVERABLE.invokeExact(radio) != 0; }
+        public int set(boolean enabled) throws Throwable { return setRadioState(Api.ENABLE_DISCOVERY, enabled); }
+    }
+
+    private WindowsBluetoothAdapter(MemorySegment radio, String address, String radioName, boolean wasDiscoverable,
+                                    boolean wasConnectable, Path restoreFile) {
         this.radio = radio; this.address = address; this.radioName = radioName;
         this.wasDiscoverable = wasDiscoverable; this.restoreFile = restoreFile;
+        this.wasConnectable = wasConnectable;
     }
 
     /** Opens the first Bluetooth radio. {@code restoreFile} is unused: visibility is restored in {@link #close()}. */
@@ -84,8 +129,10 @@ public final class WindowsBluetoothAdapter implements LocalBluetooth {
             MemorySegment params = arena.allocate(4);
             params.set(JAVA_INT, 0, 4); // BLUETOOTH_FIND_RADIO_PARAMS.dwSize
             MemorySegment handleOut = arena.allocate(ADDRESS);
-            MemorySegment find = (MemorySegment) Api.FIND_FIRST_RADIO.invokeExact(params, handleOut);
-            if (find.equals(MemorySegment.NULL)) throw new IOException("no Bluetooth radio found");
+            MemorySegment state = arena.allocate(Api.STATE);
+            MemorySegment find = (MemorySegment) Api.FIND_FIRST_RADIO.invokeExact(state, params, handleOut);
+            if (find.equals(MemorySegment.NULL)) throw new IOException("no Bluetooth radio found (Windows error "
+                    + (int) Api.LAST_ERROR.get(state, 0L) + "); check that Bluetooth is switched on");
             MemorySegment radio = handleOut.get(ADDRESS, 0);
             int ignored = (int) Api.FIND_RADIO_CLOSE.invokeExact(find);
             MemorySegment info = arena.allocate(RADIO_INFO_SIZE);
@@ -98,7 +145,8 @@ public final class WindowsBluetoothAdapter implements LocalBluetooth {
             String address = WindowsRfcomm.fromBthAddress(info.get(JAVA_LONG, 8));
             String name = readWide(info.asSlice(16, 496));
             boolean discoverable = ((int) Api.IS_DISCOVERABLE.invokeExact(radio)) != 0;
-            return new WindowsBluetoothAdapter(radio.reinterpret(8), address, name, discoverable, restoreFile);
+            boolean connectable = ((int) Api.IS_CONNECTABLE.invokeExact(radio)) != 0;
+            return new WindowsBluetoothAdapter(radio.reinterpret(8), address, name, discoverable, connectable, restoreFile);
         } catch (IOException e) {
             throw e;
         } catch (Throwable t) {
@@ -107,10 +155,10 @@ public final class WindowsBluetoothAdapter implements LocalBluetooth {
     }
 
     @Override public String discoveryLimitation() {
-        return "Windows radio discovery is available, but this Relay version cannot publish its Bluetooth service identity on Windows. Other Relay devices may not find this device over Bluetooth. Use a shared Wi-Fi/Ethernet network. Windows Bluetooth is not hardware-verified.";
+        return scanError;
     }
     @Override public String address() { return address; }
-    @Override public synchronized String name() { return radioName; }
+    @Override public synchronized String name() { return advertising ? advertisedName : radioName; }
     @Override public synchronized boolean isAdvertising() { return advertising; }
 
     @Override
@@ -130,6 +178,8 @@ public final class WindowsBluetoothAdapter implements LocalBluetooth {
                 MemorySegment buffer = arena.allocate(RESULT_BUFFER);
                 MemorySegment length = arena.allocate(JAVA_INT);
                 while (true) {
+                    buffer.fill((byte) 0);
+                    buffer.set(JAVA_INT, 0, WSAQUERYSET_SIZE);
                     length.set(JAVA_INT, 0, RESULT_BUFFER);
                     int result = (int) Api.LOOKUP_NEXT.invokeExact(lookup, LUP_RETURN_NAME | LUP_RETURN_ADDR, length, buffer);
                     if (result != 0) {
@@ -143,7 +193,19 @@ public final class WindowsBluetoothAdapter implements LocalBluetooth {
             } finally {
                 int ignored = (int) Api.LOOKUP_END.invokeExact(lookup);
             }
-            return new ArrayList<>(found.values());
+            scanError = "";
+            long deadline = System.nanoTime() + duration.toNanos();
+            List<Nearby> identified = new ArrayList<>();
+            for (Nearby device : found.values()) {
+                if (device.relayDeviceId().isEmpty() && System.nanoTime() < deadline) {
+                    try {
+                        String identity = WindowsBluetoothService.findName(device.address());
+                        if (!identity.isEmpty()) device = new Nearby(device.address(), identity, device.rssi(), device.paired());
+                    } catch (IOException e) { scanError = "Some Bluetooth service queries failed: " + e.getMessage(); }
+                }
+                identified.add(device);
+            }
+            return identified;
         } catch (IOException e) {
             throw e;
         } catch (Throwable t) {
@@ -166,27 +228,47 @@ public final class WindowsBluetoothAdapter implements LocalBluetooth {
     @Override
     public synchronized void advertise(String deviceId, String displayName, String meshId) throws IOException {
         if (!deviceId.matches("[A-Za-z0-9_-]{1,40}")) throw new IllegalArgumentException("invalid device id");
+        String wanted = meshId == null ? Nearby.advertisedName(displayName, deviceId)
+                : Nearby.advertisedMeshName(displayName, deviceId, meshId);
         try {
-            if (((int) Api.ENABLE_DISCOVERY.invokeExact(radio, 1)) == 0
-                    || ((int) Api.ENABLE_INCOMING.invokeExact(radio, 1)) == 0)
-                throw new IOException("Windows refused to make Bluetooth discoverable/connectable");
+            advertising = true; // own partial visibility changes, including a failed enable or SDP call
+            // Windows requires incoming connections enabled BEFORE enabling discovery.
+            ensureState(connectable, true, "Bluetooth incoming connections");
+            ensureState(discoverable, true, "Bluetooth discovery");
+            if (service != null && wanted.equals(advertisedName)) return;
+            if (service != null) { service.close(); service = null; }
+            service = new WindowsBluetoothService(address,
+                    Integer.getInteger("mesh.bluetooth.channel", BluetoothTransport.DEFAULT_CHANNEL), wanted);
+            advertisedName = wanted;
         } catch (IOException e) {
+            try { stopAdvertising(); } catch (IOException restore) { e.addSuppressed(restore); }
             throw e;
         } catch (Throwable t) {
-            throw new IOException("could not change Bluetooth visibility: " + t, t);
+            IOException failure = new IOException("could not change Bluetooth visibility: " + t, t);
+            try { stopAdvertising(); } catch (IOException restore) { failure.addSuppressed(restore); }
+            throw failure;
         }
-        advertising = true;
     }
 
     @Override
     public synchronized void stopAdvertising() throws IOException {
-        if (!advertising) return;
-        try {
-            int a = (int) Api.ENABLE_DISCOVERY.invokeExact(radio, wasDiscoverable ? 1 : 0);
-        } catch (Throwable t) {
-            throw new IOException("could not restore Bluetooth visibility: " + t, t);
+        IOException failure = null;
+        if (service != null) {
+            try { service.close(); service = null; } catch (IOException e) { failure = e; }
+        }
+        if (!advertising) { if (failure != null) throw failure; return; }
+        // Restore both settings even if one fails, using the order required by Windows.
+        RadioState[] states = wasDiscoverable ? new RadioState[]{connectable, discoverable} : new RadioState[]{discoverable, connectable};
+        boolean[] wanted = wasDiscoverable ? new boolean[]{wasConnectable, true} : new boolean[]{false, wasConnectable};
+        String[] labels = wasDiscoverable ? new String[]{"Bluetooth incoming connections", "Bluetooth discovery"}
+                : new String[]{"Bluetooth discovery", "Bluetooth incoming connections"};
+        for (int i = 0; i < states.length; i++) {
+            try { ensureState(states[i], wanted[i], labels[i]); }
+            catch (IOException restore) { if (failure == null) failure = restore; else failure.addSuppressed(restore); }
         }
         advertising = false;
+        advertisedName = "";
+        if (failure != null) throw failure;
     }
 
     @Override
