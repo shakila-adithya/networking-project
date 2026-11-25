@@ -31,7 +31,7 @@ public final class SetupAgent implements AutoCloseable {
     final storage.discovery.MeshDirectory directory;
     private final SetupConfigStore store;
     private final Path ui;
-    private final String startupDeviceId;
+    private volatile String startupDeviceId;
     private final storage.device.DeviceProfileStore localProfile;
     private volatile String visibilityError = "";
     private final Supplier<List<LocalNetworks.Candidate>> networks;
@@ -65,7 +65,7 @@ public final class SetupAgent implements AutoCloseable {
         if (identity.isEmpty() && Files.exists(identityFile)) identity = Files.readString(identityFile).strip();
         if (!identity.matches("[A-Za-z0-9_-]{1,40}")) identity = "device_" + UUID.randomUUID().toString().substring(0, 12);
         startupDeviceId = identity;
-        if (!Files.exists(identityFile)) Files.writeString(identityFile, identity, StandardOpenOption.CREATE_NEW);
+        if (!Files.exists(identityFile) || !Files.readString(identityFile).strip().equals(identity)) saveIdentity(identityFile, identity);
         bluetoothDirectory = new storage.bluetooth.BluetoothMeshDirectory(store.directory().resolve("bluetooth-restore.properties"));
         nativeNetwork = new storage.platform.NetworkManagerService();
         this.ui = ui.toAbsolutePath().normalize();
@@ -360,6 +360,19 @@ public final class SetupAgent implements AutoCloseable {
                 json(exchange, 403, Map.of("message", "Open setup on this laptop using http://localhost:" + port()
                         + ". Applying configuration is allowed only from the local laptop.")); return;
             }
+            if (path.equals("/api/setup/identity")) {
+                byte[] body = exchange.getRequestBody().readNBytes(1025);
+                if (body.length > 1024) { json(exchange, 413, Map.of("message", "The device ID request is too large.")); return; }
+                JsonNode form;
+                try { form = JSON.readTree(body); }
+                catch (IOException e) { json(exchange, 400, Map.of("message", "Enter a valid device ID.")); return; }
+                if (form == null || !form.isObject() || form.size() != 1 || !form.path("deviceId").isTextual()) {
+                    json(exchange, 400, Map.of("message", "Only the device ID can be changed here.")); return;
+                }
+                try { json(exchange, 200, changeIdentity(form.path("deviceId").asText())); }
+                catch (IOException e) { json(exchange, 409, Map.of("message", "Could not save the device ID. Check local file permissions and try again.")); }
+                return;
+            }
             if (path.equals("/api/setup/device")) {
                 byte[] body = exchange.getRequestBody().readNBytes(4097);
                 if (body.length > 4096) { json(exchange, 413, Map.of("message", "The device name request is too large.")); return; }
@@ -443,14 +456,53 @@ public final class SetupAgent implements AutoCloseable {
     }
     /** Device preferences belong to this local app, even when its mesh service is stopped. */
     private Map<String, Object> localDeviceName() {
-        ManagedPeer current = node;
-        if (current != null) {
-            var status = current.deviceStatus();
-            return Map.of("deviceId", status.get("deviceId"), "customName", status.get("customName"), "displayName", status.get("displayName"));
-        }
         var profile = new storage.device.DeviceProfileStore(store.directory().resolve("device-profile.json")).load();
-        String id = saved == null ? "" : saved.peer().localPeerId();
+        String id = saved == null ? startupDeviceId : saved.peer().localPeerId();
         return Map.of("deviceId", id, "customName", profile.displayName(), "displayName", profile.effectiveName(id.isEmpty() ? "This device" : id));
+    }
+    private static void saveIdentity(Path path, String id) throws IOException {
+        Path temporary = Files.createTempFile(path.getParent(), ".identity-", ".tmp");
+        try {
+            Files.writeString(temporary, id + "\n", StandardCharsets.UTF_8);
+            Files.move(temporary, path, StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING);
+        } finally { Files.deleteIfExists(temporary); }
+    }
+    private synchronized Map<String, Object> changeIdentity(String id) throws IOException {
+        if (closed || restarting) throw new IllegalArgumentException("Relay is reconnecting. Wait before changing its device ID.");
+        if (!id.matches("[A-Za-z0-9_-]{1,40}"))
+            throw new IllegalArgumentException("Use 1–40 letters, numbers, underscores or hyphens for the device ID.");
+        String oldId = saved == null ? startupDeviceId : saved.peer().localPeerId();
+        if (id.equals(oldId)) return Map.of("deviceId", id, "restarting", false, "message", "Device ID is unchanged.");
+        boolean duplicate = saved != null && saved.peer().peers().stream().anyMatch(p -> p.id().equals(id))
+                || node != null && node.registry.members().stream().anyMatch(p -> p.endpoint().name().equals(id))
+                || directory.devices().stream().anyMatch(p -> p.deviceId().equals(id))
+                || directory.nearby().stream().anyMatch(p -> p.peerId().equals(id))
+                || (node == null ? bluetoothDirectory.nearby() : node.bluetoothNearby()).stream()
+                        .anyMatch(p -> p.relayDeviceId().filter(id::equals).isPresent());
+        if (duplicate) throw new IllegalArgumentException("That device ID is already used by another known device. Choose a different ID.");
+        var previousAdvertisement = publicDevice();
+        if (saved == null) {
+            saveIdentity(store.directory().resolve("device-id.txt"), id);
+        } else {
+            var old = saved.peer();
+            var peers = old.peers().stream().map(p -> p.id().equals(oldId)
+                    ? new PeerConfiguration.PeerDefinition(id, p.address(), p.port()) : p).toList();
+            var updated = new PeerConfiguration(id, old.bindAddress(), old.advertisedAddress(), old.port(), old.storageDirectory(),
+                    peers, old.clusterId(), old.discoveryEnabled(), old.discoveryGroup(), old.discoveryPort(), old.discoverySecret());
+            var next = new SetupConfigStore.Saved(updated, saved.restPort());
+            // The saved configuration is the authoritative identity for configured devices.
+            store.save(next);
+            saved = next;
+        }
+        startupDeviceId = id;
+        directory.announce(new storage.discovery.MeshDirectory.DeviceAdvertisement(previousAdvertisement.protocol(), oldId,
+                previousAdvertisement.displayName(), previousAdvertisement.meshId(), previousAdvertisement.peerPort(), false));
+        boolean reconnect = saved != null && store.autoJoin();
+        if (reconnect) restart();
+        else { applyIdleVisibility(); directory.scan(); }
+        return Map.of("deviceId", id, "restarting", reconnect, "message", reconnect
+                ? "Device ID saved. Relay is reconnecting. Your files and mesh password are kept."
+                : "Device ID saved. Your files and mesh settings are kept.");
     }
     private boolean localManagement(HttpExchange exchange) { return LocalUserGuard.allowed(exchange); }
     SetupConfigStore.Saved validate(Join join) throws IOException {
@@ -522,6 +574,7 @@ public final class SetupAgent implements AutoCloseable {
                             started.offerCandidate(new storage.cluster.PeerEndpoint(item.peerId(), item.address(), item.peerPort())));
                 }
             } catch (Exception e) {
+                System.err.println("Node could not start: " + e);
                 phase = "ERROR";
                 error = "Node could not start. Check that the selected network is still connected, multicast is supported, and TCP ports are free. Stop any old Java node and retry Restart.";
             } finally { synchronized (this) { restarting = false; } }

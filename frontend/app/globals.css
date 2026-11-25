@@ -2419,3 +2419,10 @@ hr {
   .map-page .map-area .topology { height: var(--panel-height); min-height: 0; }
 }
 .map-heading .map-key { padding: 14px 0 0; pointer-events: auto; }
+/* Device identity can be changed without editing local configuration files. */
+.device-id-settings { margin-top: 28px; padding-top: 24px; border-top: 1px solid var(--line, #293b42); }
+.device-id-settings form { margin-top: 16px; }
+.device-id-settings .name-row { margin-top: 8px; }
+.device-id-settings .text-input { min-width: 0; }
+.device-id-settings .hint { margin-top: 12px; }
+@media (max-width: 600px) { .device-id-settings .name-row { flex-direction: column; align-items: stretch; } }

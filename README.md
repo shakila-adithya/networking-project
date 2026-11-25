@@ -52,6 +52,10 @@ On Windows, run Maven commands from `backend/` using `.\mvnw.cmd`. Use the front
 
 ## Configure devices
 
+Device IDs can be changed in **Settings → Your device ID → Save device ID**. Choose 1–40 letters, numbers, underscores or hyphens, for example `Windows_PC_2`. The app rejects IDs used by known peers and nearby devices, preserves received-file paths and the mesh password, and reconnects an active local node automatically. Changing an ID interrupts current transfers. Offline or hidden devices cannot be checked, so choose different IDs on every computer.
+
+New installations generate a unique local identity automatically. `backend/config/device-id.txt` is machine-specific and is excluded from Git; existing local identity files are preserved. When copying an entire installation rather than cloning the repository, use the Settings editor to change any copied ID. Saved mesh configuration remains authoritative after joining.
+
 Each device needs a unique peer ID, its own reachable advertised address, a TCP file-service port, and a local storage directory. Mesh members use a shared mesh ID and password. Public discovery is unverified; every application carrier authenticates with J-PAKE and TLS. See [joining through Settings](docs/join-device-C.md).
 
 You can also start a console node using JSON configuration, from `backend/`:
