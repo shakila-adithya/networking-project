@@ -46,10 +46,17 @@ public final class NetworkManagerService implements AutoCloseable {
     private String mode = "";
     private String markedInterface = "";
     private String operationError = "";
+    private WindowsDirectGroup windowsGroup;
 
     public NetworkManagerService() {
-        if (!System.getProperty("os.name", "").toLowerCase(Locale.ROOT).contains("linux")) {
-            unavailable = "This build has no Windows WinRT Wi-Fi Direct/Mobile Hotspot adapter. LAN remains available; native Windows support is not implemented.";
+        String os = System.getProperty("os.name", "").toLowerCase(Locale.ROOT);
+        if (os.startsWith("windows")) {
+            windowsGroup = new WindowsDirectGroup();
+            unavailable = "On Windows, host a Wi-Fi Direct group in Relay or join it from the Windows Wi-Fi list.";
+            return;
+        }
+        if (!os.contains("linux")) {
+            unavailable = "Native radio setup is supported on Windows and Linux.";
             return;
         }
         try {
@@ -92,6 +99,7 @@ public final class NetworkManagerService implements AutoCloseable {
         return result;
     }
     public synchronized Map<String, Object> status() {
+        if (windowsGroup != null) return windowsGroup.status();
         try {
             var adapters = adapters();
             String state = "STOPPED";
@@ -193,8 +201,13 @@ public final class NetworkManagerService implements AutoCloseable {
     }
     public synchronized void stop(boolean confirmed) throws IOException {
         requireConfirmed(confirmed);
+        if (windowsGroup != null) { windowsGroup.close(); return; }
         try { cleanup(); operationError = ""; }
         catch (Exception e) { throw failure("Could not stop/restore the Relay radio connection; reconnect your previous Wi-Fi in system settings.", e); }
+    }
+    public synchronized void hostDirectGroup(String password, boolean confirmed) throws IOException {
+        if (windowsGroup == null) throw new IOException("Direct group hosting is available on Windows.");
+        windowsGroup.start(password, confirmed);
     }
     private void cleanup() throws Exception {
         Exception failure = null;
@@ -236,6 +249,7 @@ public final class NetworkManagerService implements AutoCloseable {
         if (bus != null) { try { bus.close(); } catch (IOException e) { System.err.println("NetworkManager D-Bus close failed: " + e.getMessage()); } bus = null; }
     }
     public synchronized void close() {
+        if (windowsGroup != null) windowsGroup.close();
         if (bus != null) {
             try { cleanup(); } catch (Exception e) { System.err.println("Relay radio cleanup failed; restore Wi-Fi in system settings: " + e.getMessage()); }
             closeBus();

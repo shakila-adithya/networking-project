@@ -12,7 +12,7 @@ All members must run the updated backend with JDK 25. Build once with Maven in `
 
 Mesh passwords contain 16–256 characters. Mesh IDs use letters, numbers, dots, underscores and hyphens. The browser never saves passwords in localStorage/sessionStorage and APIs do not return saved credentials.
 
-Linux hotspot/Wi-Fi Direct controls are in Network map. Radio changes require acknowledging that the current Wi-Fi may disconnect. Wi-Fi Direct currently lists OS P2P devices: connect the radio group first, then scan/join the Relay mesh over that IP network. Windows native radio adapters remain unimplemented; Windows LAN uses the Java IP transport. See [exact implementation and hardware limits](offline-mesh-status.md).
+Linux hotspot/Wi-Fi Direct controls are in Network map. Radio changes require acknowledging that the current Wi-Fi may disconnect. Wi-Fi Direct currently lists OS P2P devices: connect the radio group first, then scan/join the Relay mesh over that IP network. Windows can host a Wi-Fi Direct group. Join its advertised network through the Wi-Fi list on the second laptop, then scan for the mesh. See [exact implementation and hardware limits](offline-mesh-status.md).
 
 ## Start the local host
 

@@ -78,6 +78,29 @@ test("Wi-Fi Direct uses its own scan and requires acknowledgement to connect", a
   ]);
 });
 
+test("Windows group hosting requires a password and consent and shows the name reported by Windows", async ({ page }) => {
+  const posts = await connectionFixture(page);
+  let groupActive = false;
+  await page.route("**/api/radio", route => route.fulfill({ json: {
+    available: true, directHost: true, adapters: [], peers: [], state: groupActive ? "ACTIVE" : "STOPPED",
+    mode: groupActive ? "wifi-direct" : "", groupName: groupActive ? "DIRECT-Relay-fixture" : "",
+  } }));
+  await page.route("**/api/radio/direct-group", async route => {
+    groupActive = true;
+    await route.fallback();
+  });
+  await page.goto("/");
+  const methods = page.getByRole("region", { name: "Connection methods" });
+  await methods.getByRole("tab", { name: /^Wi-Fi Direct/ }).click();
+  const start = methods.getByRole("button", { name: "Start Wi-Fi Direct group" });
+  await methods.getByLabel(/Group password/).fill("group password");
+  await expect(start).toBeDisabled();
+  await methods.getByRole("checkbox").check();
+  await start.click();
+  await expect(methods.getByText("DIRECT-Relay-fixture")).toBeVisible();
+  expect(posts).toContainEqual({ path: "/api/radio/direct-group", body: { password: "group password", confirmed: true } });
+});
+
 test("unavailable methods explain platform limitations without offering a hotspot form", async ({ page }) => {
   await connectionFixture(page, { bluetooth: false, nativeAvailable: false });
   await page.goto("/");

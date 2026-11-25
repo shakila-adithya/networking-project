@@ -6,6 +6,7 @@ import { ConnectionGlyph, ConnectionMethod } from "./connection-glyph";
 export type LocalNetwork = { address: string; label: string };
 export type RadioStatus = {
   available: boolean; reason?: string; state: string; mode?: string; error?: string;
+  directHost?: boolean; groupName?: string;
   adapters: { path: string; name: string; type: string; hotspotCapable: boolean }[];
   peers: { devicePath: string; address: string; name: string }[];
 };
@@ -34,7 +35,7 @@ export function ConnectionMethods(props: Props) {
   const native = preview ? null : props.radio;
   const adapters = native ? native.adapters : [];
   const hotspots = adapters.filter(a => a.hotspotCapable);
-  const directAvailable = !!native?.available && adapters.some(a => a.type === "wifi-direct");
+  const directAvailable = !!native?.available && (native.directHost || adapters.some(a => a.type === "wifi-direct"));
   const hotspotAvailable = !!native?.available && hotspots.length > 0;
   const bluetoothAvailable = device?.bluetooth.available ?? props.bluetoothAvailable ?? (bluetooth?.adapter ? true : undefined);
   const networks = preview ? [{ address: "192.0.2.10", label: "Example local network" }] : props.networks;
@@ -72,7 +73,7 @@ export function ConnectionMethods(props: Props) {
         const next = event.key === "Home" ? 0 : event.key === "End" ? methods.length - 1 : (index + offset + methods.length) % methods.length;
         setMethod(methods[next].id); document.getElementById(`method-${methods[next].id}`)?.focus();
       }} id={`method-${item.id}`} key={item.id} aria-selected={method === item.id} aria-controls="connection-method-panel" onClick={() => setMethod(item.id)} className={method === item.id ? "selected" : ""}>
-        <ConnectionGlyph kind={item.id} /><span><b>{item.label}</b><small className={count(item.id) && !preview ? "ready" : ""}>{preview ? "Preview" : count(item.id) ? `${count(item.id)} active link${count(item.id) === 1 ? "" : "s"}` : supported[item.id] === undefined ? props.checking ? "Checking…" : "Not reported" : supported[item.id] ? item.id === "hotspot" ? "Can host" : "Available" : "Unavailable"}</small></span>
+        <ConnectionGlyph kind={item.id} /><span><b>{item.label}</b><small className={count(item.id) && !preview ? "ready" : ""}>{preview ? "Preview" : count(item.id) ? `${count(item.id)} active link${count(item.id) === 1 ? "" : "s"}` : supported[item.id] === undefined ? props.checking ? "Checking…" : "Not reported" : supported[item.id] ? item.id === "hotspot" ? "Can host" : item.id === "wifi-direct" && native?.directHost ? "Host setup" : "Available" : "Unavailable"}</small></span>
       </button>)}
     </div>
     <div id="connection-method-panel" className="connection-method-panel" role="tabpanel" tabIndex={0} aria-labelledby={`method-${method}`}>
@@ -88,7 +89,24 @@ export function ConnectionMethods(props: Props) {
         {!networks.length && <p className="method-empty">No compatible local address detected. Connect Wi-Fi, Ethernet or a hotspot, then refresh.</p>}
         {!preview && (props.networksError || props.discoveryError) && <p className="connection-note">{props.networksError || props.discoveryError}<span>Bluetooth discovery is separate and may still be available.</span></p>}
       </>}
-      {method === "wifi-direct" && <>
+      {method === "wifi-direct" && native?.directHost && <>
+        <div className="method-heading"><h4>Connect without a router</h4><span className="method-tag">{isOwn ? nativeState : "Host setup"}</span></div>
+        <p className="method-help">On one laptop, start a group. On the other, open the Windows Wi-Fi list and join the group using its password.</p>
+        {isOwn ? <>
+          <p className="hosted-network"><b>{native.groupName}</b></p>
+          <p className="method-help">Once connected, make the host visible and create a Relay mesh. On the other laptop, select Scan nearby and join with the mesh password.</p>
+          {warning}
+          <button className="button method-stop" disabled={!confirmed || props.busy} onClick={() => void props.perform("/radio/stop", { confirmed })}>Stop Wi-Fi Direct</button>
+        </> : <form className="connection-form" onSubmit={async event => {
+          event.preventDefault();
+          if (await props.perform("/radio/direct-group", { password, confirmed })) setPassword("");
+        }}>
+          <label className="connection-field">Group password<input className="text-input" type="password" autoComplete="new-password" required minLength={8} maxLength={63} pattern="[ -~]{8,63}" value={password} onChange={event => setPassword(event.target.value)} /><small>Share these 8–63 ASCII characters with the other laptop.</small></label>
+          {warning}
+          <button className="button primary" disabled={!confirmed || password.length < 8 || props.busy}>Start Wi-Fi Direct group</button>
+        </form>}
+      </>}
+      {method === "wifi-direct" && !native?.directHost && <>
         <div className="method-heading"><h4>Connect without a router</h4><span className="method-tag">{preview ? "Preview" : isOwn ? nativeState : directAvailable ? "Ready" : "Unavailable"}</span></div>
         <p className="method-help">Find a Wi-Fi Direct device, connect through the operating system, then scan for its Relay mesh. Accept system pairing prompts when requested.</p>
         {!preview && !directAvailable && <p className="connection-note">{nativeReason || "No Wi-Fi Direct adapter was reported by the operating system or driver."}</p>}

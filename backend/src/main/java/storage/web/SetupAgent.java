@@ -208,6 +208,8 @@ public final class SetupAgent implements AutoCloseable {
             JsonNode form = bytes.length == 0 ? JSON.createObjectNode() : JSON.readTree(bytes);
             switch (path) {
                 case "/api/radio/scan" -> nativeNetwork.scan();
+                case "/api/radio/direct-group" -> nativeNetwork.hostDirectGroup(form.path("password").asText(),
+                        form.path("confirmed").asBoolean(false));
                 case "/api/radio/hotspot" -> nativeNetwork.startHotspot(form.path("devicePath").asText(),
                         form.path("ssid").asText(), form.path("password").asText(), form.path("confirmed").asBoolean(false));
                 case "/api/radio/connect" -> nativeNetwork.connectP2P(form.path("devicePath").asText(),

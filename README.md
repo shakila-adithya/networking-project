@@ -4,7 +4,7 @@ Relay connects devices so they can exchange messages and files over a local netw
 
 Files go only to their intended recipients. There is **no automatic backup replication, storage repair, redistribution, or delivery to devices that join later**. Network recovery still discovers replacement connections and routes when a physical path exists.
 
-The complete cross-platform mesh product is **not finished**: Windows native radio adapters and real two-device radio interoperability are still outstanding. See [implementation and hardware verification status](docs/offline-mesh-status.md).
+The complete cross-platform mesh product is **not finished**: Two-laptop radio interoperability still needs hardware verification. See [implementation and hardware verification status](docs/offline-mesh-status.md).
 
 ## Project layout
 
@@ -51,6 +51,13 @@ npm --prefix frontend run build
 ```
 
 On Windows, run Maven commands from `backend/` using `.\mvnw.cmd`. Use the frontend npm commands from the root or `frontend/`. See [frontend guide](frontend/README.md) for development and browser tests.
+
+## Connect two Windows laptops without a router
+
+1. Enable Wi-Fi on both laptops and turn off Windows Mobile Hotspot on the host. In Relay, open **Network map → Connection setup → Wi-Fi Direct**, enter a group password, acknowledge the network change and select **Start Wi-Fi Direct group**.
+2. When Relay shows **Running**, open the second laptop's Wi-Fi list and join the displayed **DIRECT-Relay-…** network using the group password. Windows may show “No internet” on this link.
+3. On the host, enable visibility and create a Relay mesh. On the second laptop, open Relay, press **Scan nearby** and join using the separate mesh password. Send a chat message, then a file. Relay uses IP discovery and authenticated TCP over this group, so the peer may appear under **Wi-Fi / LAN**.
+4. Select **Stop Wi-Fi Direct** on the host to disconnect the group. Hosting requires a compatible Windows Wi-Fi driver and 64-bit .NET Framework. Two-laptop file delivery still requires hardware verification.
 
 ## Configure devices
 
@@ -181,7 +188,7 @@ quit
 
 Tests cover local-only uploads, chosen recipients, intentional fan-out, local deletion, no redistribution across peer failure/restart, integrity and duplicate checks, TCP timeouts, concurrent clients, discovery, routing, mesh transfer/resume and shutdown. Multicast tests skip on hosts without loopback multicast. Bluetooth hardware checks require appropriate hardware; fake-radio tests do not prove physical interoperability.
 
-Application entry points protect mesh traffic and direct TCP file traffic using J-PAKE and TLS authenticated encryption. Local browser APIs check loopback, Host and Origin. Encryption is hop by hop; mesh members are trusted. Linux native Wi-Fi Direct/hotspot controls use NetworkManager; Windows native radio support is still missing. See [security, migration and exact hardware limits](docs/offline-mesh-status.md).
+Application entry points protect mesh traffic and direct TCP file traffic using J-PAKE and TLS authenticated encryption. Local browser APIs check loopback, Host and Origin. Encryption is hop by hop; mesh members are trusted. Linux Wi-Fi Direct and hotspot controls use NetworkManager. Windows can host a Wi-Fi Direct group through WinRT. See [security, migration and exact hardware limits](docs/offline-mesh-status.md).
 
 Upgrade every device together. An older backend can still create automatic copies when receiving ordinary `PUT` uploads. The retained upload-command alias works inside authenticated sessions. Old unauthenticated peers must update before connecting. REST responses no longer include `replicaCount` or `replicationStatus`; sharing retains `deliveredTo`, `failedPeers`, `transfers`, and `shareStatus`.
 

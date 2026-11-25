@@ -1,6 +1,6 @@
 # Offline mesh implementation and verification
 
-This is a partial implementation of the requested Linux/Windows product, not a claim of completed hardware interoperability. Windows Bluetooth Classic includes Winsock RFCOMM, radio inquiry/visibility and SDP service identity publication/lookup. Windows Wi-Fi Direct/Mobile Hotspot adapters and pre-connection Wi-Fi Direct mesh advertisements are still missing. Both radio platforms require two-device validation.
+This is a partial implementation of the requested Linux/Windows product, not a claim of completed hardware interoperability. Windows Bluetooth Classic includes Winsock RFCOMM, radio inquiry/visibility and SDP service identity publication/lookup. Windows can host a Wi-Fi Direct autonomous group with password-protected legacy-client access. The client joins from its Wi-Fi list. Windows Mobile Hotspot control and pre-connection mesh advertisements remain unimplemented. Both radio platforms require two-device validation.
 
 ## Using the implemented controls
 
@@ -65,14 +65,14 @@ The real Linux NetworkManager read-only capability query succeeded and reported 
 | Hardware combination | What was tested |
 |---|---|
 | Linux to Linux, separate devices | Not tested: no second controlled Relay test device was available |
-| Windows to Windows | Not tested: no Windows runtime/devices; Winsock Bluetooth adapter written, never executed; Windows Wi-Fi Direct/hotspot unimplemented |
+| Windows to Windows | Two-laptop transfer unverified. Windows has Winsock Bluetooth and WinRT Wi-Fi Direct group hosting. |
 | Linux to Windows | Not tested; Linux cannot discover a Windows device by name tag (see above) |
 | One Linux host, TCP loopback | Authenticated membership, chat/routing/file-service tests |
 | One Linux host, NetworkManager | Capability reads and actual Wi-Fi Direct StartFind acceptance; no hotspot/P2P activation or peer negotiation |
 | One Linux host, Secret Service | Actual temporary key create/reopen, encrypted record round-trip and cleanup |
 | In-memory and fake RFCOMM | Authentication/forwarding/recovery/transfer algorithms only |
 
-The requested complete product remains blocked on Windows execution testing, Windows Wi-Fi Direct/hotspot (WinRT) adapters, Windows device discoverability, Linux two-device pairing/group/hotspot validation, and cross-platform hardware validation. Pre-connection Wi-Fi Direct mesh service advertisements also remain unimplemented. Building and passing in-memory tests cannot close those gaps.
+The requested complete product remains blocked on Windows execution testing, Windows Mobile Hotspot controls and two-device Wi-Fi Direct validation, Windows device discoverability, Linux two-device pairing/group/hotspot validation, and cross-platform hardware validation. Pre-connection Wi-Fi Direct mesh service advertisements also remain unimplemented. Building and passing in-memory tests cannot close those gaps.
 
 Reference APIs: [Bouncy Castle J-PAKE](https://downloads.bouncycastle.org/lts-java/docs/bccore-lts8on-2.73.11-javadoc/org/bouncycastle/crypto/agreement/jpake/JPAKEParticipant.html), [NetworkManager unsaved profiles](https://networkmanager.dev/docs/api/latest/gdbus-org.freedesktop.NetworkManager.Settings.html), [NetworkManager Wi-Fi P2P](https://networkmanager.dev/docs/api/latest/gdbus-org.freedesktop.NetworkManager.Device.WifiP2P.html), [Windows Wi-Fi Direct publisher](https://learn.microsoft.com/en-us/uwp/api/windows.devices.wifidirect.wifidirectadvertisementpublisher).
 
