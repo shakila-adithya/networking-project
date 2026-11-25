@@ -108,15 +108,15 @@ public final class NativeRfcomm implements RfcommApi {
 
     private static void requireLinux() throws IOException {
         if (!System.getProperty("os.name", "").toLowerCase(Locale.ROOT).contains("linux"))
-            throw new IOException("Bluetooth RFCOMM in this build requires Linux/BlueZ; Windows native Bluetooth is not implemented.");
+            throw new IOException("NativeRfcomm requires Linux/BlueZ; use WindowsRfcomm on Windows.");
     }
 
     // ================= RfcommApi =================
 
     @Override
     public RfcommServer listen(int channel) throws IOException {
-        requireLinux();
         checkChannel(channel);
+        requireLinux();
         Fd fd = newSocket();
         try (Arena arena = Arena.ofConfined()) {
             MemorySegment state = arena.allocate(Linux.CAPTURE);
@@ -136,9 +136,9 @@ public final class NativeRfcomm implements RfcommApi {
 
     @Override
     public RfcommConnection connect(String bluetoothAddress, int channel, Duration timeout) throws IOException {
-        requireLinux();
         checkChannel(channel);
         String address = BluetoothAddress.normalize(bluetoothAddress);
+        requireLinux();
         Fd fd = newSocket();
         try (Arena arena = Arena.ofConfined()) {
             MemorySegment state = arena.allocate(Linux.CAPTURE);

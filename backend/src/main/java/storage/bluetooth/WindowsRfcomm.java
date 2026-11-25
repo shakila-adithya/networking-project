@@ -122,8 +122,8 @@ public final class WindowsRfcomm implements RfcommApi {
 
     @Override
     public RfcommServer listen(int channel) throws IOException {
-        requireWindows();
         checkChannel(channel);
+        requireWindows();
         Sock sock = newSocket();
         try (Arena arena = Arena.ofConfined()) {
             MemorySegment state = arena.allocate(Win.CAPTURE);
@@ -141,9 +141,9 @@ public final class WindowsRfcomm implements RfcommApi {
 
     @Override
     public RfcommConnection connect(String bluetoothAddress, int channel, Duration timeout) throws IOException {
-        requireWindows();
         checkChannel(channel);
         String address = BluetoothAddress.normalize(bluetoothAddress);
+        requireWindows();
         Sock sock = newSocket();
         ConnectTask task = new ConnectTask(sock, address, channel);
         Thread worker = new Thread(task, "rfcomm-connect");

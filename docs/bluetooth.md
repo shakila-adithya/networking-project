@@ -1,12 +1,12 @@
 # Bluetooth
 
-The mesh can run over **real Bluetooth Classic (RFCOMM)** on Linux. Code: `backend/src/main/java/storage/bluetooth/`.
+The mesh implements **Bluetooth Classic (RFCOMM)** on Linux/BlueZ and Windows/Winsock. Code: `backend/src/main/java/storage/bluetooth/`. Two-device interoperability still requires hardware verification.
 
 | Part | How |
 |---|---|
 | Data link | `AF_BLUETOOTH` RFCOMM **kernel sockets** called through the JDK's FFM API (`NativeRfcomm`): listen, accept, connect, read, write. No native library to install, **no root** |
 | Adapter, discovery, signal | BlueZ on the system D-Bus via `bluez-dbus` (`BlueZAdapter`): adapter address, device scan with names |
-| Finding other Relay devices | While the device is **visible**, the adapter is named **`<display name> [relay:<deviceId>]`** (or just `relay:<deviceId>` without a display name); scans keep only devices with such a name (headphones and phones are ignored) |
+| Finding other Relay devices | Linux advertises **`<display name> [relay:<deviceId>]`** in the radio name. Windows publishes those tags in a Bluetooth SDP service named for Relay; scans query this service on radios without a Relay name. Both include the public mesh tag when joined. Discovery is unverified until password authentication succeeds. |
 | Connecting | Every Relay device listens on RFCOMM channel 22, so no service lookup is needed; the topology controller decides whom to connect to |
 | Above the radio | Identical to TCP: `Transport`/`Link`, HELLO, AODV routing, chat, file transfer |
 
@@ -30,6 +30,12 @@ same computer. Your device is **hidden until you make it visible**.
 
 Requirements: Linux, BlueZ running (`systemctl is-active bluetooth`), Bluetooth switched on, the `rfcomm` kernel module
 (`lsmod | grep rfcomm`; it loads on demand), a normal desktop session (D-Bus access to BlueZ).
+
+On Windows, switch Bluetooth on in Settings and keep the Bluetooth Support Service running. No radio rename or registry edit is required. The app uses `WSASetServiceW` to register/remove SDP service UUID `6c9e9f40-8a5b-4f86-a4b7-6e8c02d19a31`, and service lookup to read other Windows devices' identity. Existing Linux name advertisements remain supported. Install BlueZ's `sdptool` on Linux (commonly the `bluez` package) and update both devices to this version so Linux can read Windows SDP identities. Linux service queries are bounded and do not run for radios already identified by name. Bluetooth pairing prompts may still be required by the OS.
+
+Windows restores discoverable/connectable settings when visibility is disabled or the adapter is closed. Its SDP record is removed on hiding/close and Windows also removes process-owned records when the process exits. Windows also scopes discovery changes to the calling application's lifetime; see [BluetoothEnableDiscovery](https://learn.microsoft.com/en-us/windows/win32/api/bluetoothapis/nf-bluetoothapis-bluetoothenablediscovery).
+
+For Windows builds, change to `backend/` and run `.\mvnw.cmd clean verify`. Then run `.\mvnw.cmd exec:java "-Dexec.mainClass=storage.app.PeerNode" "-Dexec.args=--setup"`. Open `http://localhost:6080`; turn visibility on and scan on each device. Rebuild/restart both backends after updating. To explicitly test local Windows SDP registration, lookup and removal with Bluetooth switched on, run `.\mvnw.cmd test "-Dtest=BluetoothServiceTest" "-Drelay.hardwareTests=true"`. This local check does not prove a link between two physical devices.
 
 ## What the app changes on your adapter (and restores)
 Only while the device is **visible**: the adapter name becomes `<name> [relay:<id>]`, it becomes **discoverable**, and the 180 s
@@ -60,8 +66,10 @@ the adapter and nearby devices through `/api/mesh`.
 (routing, chat, file transfer, healing) is tested on `BluetoothTransport` using an in-memory fake radio, which proves the
 adapter and the layers above it but is **not** Bluetooth.
 
+On 2026-11-25, the Windows `BluetoothServiceTest` passed all three checks on an Intel radio: native SDP record publication, local service lookup, record removal, and RFCOMM listen/accept timeout. This verifies the local native boundary, not a two-device link. Windows error 259 was reproduced while Bluetooth was off and cleared after switching it on. Restart Relay if its radio was unavailable at startup, because that setup session retains the unavailable adapter result.
+
 ## Limitations
-* Bluetooth Classic only (no BLE); Linux/BlueZ only; one RFCOMM channel (22).
+* Bluetooth Classic only (no BLE); Linux/BlueZ and Windows/Winsock adapters; one RFCOMM channel (22).
 * Scanning is a duty cycle (8 s every 30 s) because inquiry slows connections; discovery is therefore not instant.
 * Application entry points now wrap RFCOMM in J-PAKE password authentication and TLS authenticated encryption. Honor system pairing prompts when the stack requires them. The secured two-device Bluetooth path has not been validated on real hardware.
 * Signal strength (RSSI) is shown only when BlueZ reports it; link cost for routing is still hop count.
