@@ -21,6 +21,7 @@ export type Chat = {
   from: string;
   text: string;
   receivedAt?: string;
+  timestampMillis?: number;
 };
 export type BluetoothInfo = {
   adapter: string;

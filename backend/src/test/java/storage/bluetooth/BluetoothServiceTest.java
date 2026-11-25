@@ -8,6 +8,21 @@ import static org.junit.jupiter.api.Assertions.*;
 import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 class BluetoothServiceTest {
+    @Test void windowsVisibilityCanBeAppliedRepeatedlyAndRestored() throws Exception {
+        assumeTrue(Boolean.getBoolean("relay.hardwareTests") && WindowsRfcomm.isSupported(),
+                "Opt in to Windows visibility testing with -Drelay.hardwareTests=true");
+        try (var adapter = WindowsBluetoothAdapter.open(null)) {
+            adapter.advertise("local_visibility_test", "Local visibility test", null);
+            assertTrue(adapter.isAdvertising());
+            adapter.advertise("local_visibility_test", "Local visibility test", null);
+            adapter.advertise("local_visibility_test", "Updated visibility test", "visibility-test");
+            assertTrue(adapter.isAdvertising());
+            assertEquals("Updated visibility test [relay:local_visibility_test] [mesh:visibility-test]", adapter.name());
+            adapter.stopAdvertising();
+            assertFalse(adapter.isAdvertising());
+            adapter.stopAdvertising();
+        }
+    }
     @Test void windowsRegistrationKeepsServiceIdentityAndChannel() {
         try (Arena arena = Arena.ofConfined()) {
             var query = WindowsBluetoothService.registration(arena, "AA:BB:CC:DD:EE:FF", 22,

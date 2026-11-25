@@ -19,6 +19,8 @@ The interface includes Network map, Messages, Share files, and Settings (includi
 
 ## Build and start
 
+Use the **Light mode / Dark mode** switch in the header to change the interface theme. The preference is saved in this browser and applies to every page. On first use, Relay follows the operating system's light/dark preference.
+
 Requirements: JDK 25 and Node.js 24. Maven and frontend dependencies may require internet access during the initial build. Once built, the Java backend serves the static frontend; a Node server is unnecessary.
 
 From the repository root on Linux/macOS:

@@ -1,24 +1,64 @@
 "use client";
-import { Fragment, useEffect, useState } from "react";
+import { Fragment, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { request, useMesh } from "@/lib/mesh";
 import { Icon, Avatar, Eyebrow, Badge, Search } from "./ui";
-type Outgoing = { id: string; to: string; text: string; status: string };
+type Outgoing = { id: string; to: string; text: string; status: string; time: number; order: number };
+type Incoming = { id: string; from: string; text: string; time: number; order: number };
 export function Messages() {
   const { preview, peers, inbox } = useMesh(),
     [selected, setSelected] = useState("A"),
     [query, setQuery] = useState(""),
     [text, setText] = useState(""),
     [outgoing, setOutgoing] = useState<Outgoing[]>([]),
+    [incoming, setIncoming] = useState<Incoming[]>([]),
     [error, setError] = useState(""),
     [busy, setBusy] = useState(false);
+  const sequence = useRef(0);
+  const observed = useRef(new Map<string, { time: number; order: number }>());
+  const inboxLoaded = useRef(false);
+  const chatScroll = useRef<HTMLDivElement>(null);
+  const followLatest = useRef(true);
   useEffect(() => {
     setOutgoing([]);
+    setIncoming([]);
+    observed.current.clear();
+    inboxLoaded.current = false;
+    sequence.current = 0;
     setText("");
     setError("");
   }, [preview]);
+  useEffect(() => {
+    if (preview) return;
+    const initial = !inboxLoaded.current;
+    inboxLoaded.current = true;
+    const now = Date.now();
+    const nextObserved = new Map<string, { time: number; order: number }>();
+    setIncoming(inbox.map(message => {
+      const key = `${message.from}/${message.chatId}`;
+      const timestamp = message.timestampMillis ?? Date.parse(message.receivedAt || "");
+      // Existing history precedes this session. New arrivals use local observation time,
+      // so another computer's clock cannot insert a new reply above our sent messages.
+      const position = observed.current.get(key) || {
+        time: initial ? (Number.isFinite(timestamp) ? Math.min(timestamp, now) : 0) : now,
+        order: sequence.current++,
+      };
+      nextObserved.set(key, position);
+      return { id: message.chatId, from: message.from, text: message.text, ...position };
+    }));
+    observed.current = nextObserved;
+  }, [inbox, preview]);
   const person = peers.find((p) => p.id === selected) || peers[0],
     name = person?.name || "a device";
+  const timeline = [
+    ...incoming.filter(message => message.from === person?.id).map(message => ({ ...message, own: false, meta: message.from, waiting: false })),
+    ...outgoing.filter(message => message.to === person?.id).map(message => ({ ...message, own: true, meta: message.status, waiting: message.status === "PENDING" })),
+  ].sort((a, b) => a.time - b.time || a.order - b.order);
+  const latestMessage = timeline.length ? `${timeline[timeline.length - 1].own}/${timeline[timeline.length - 1].id}` : "";
+  useEffect(() => { followLatest.current = true; }, [person?.id, preview]);
+  useEffect(() => {
+    if (chatScroll.current && followLatest.current) chatScroll.current.scrollTop = chatScroll.current.scrollHeight;
+  }, [person?.id, latestMessage, preview]);
   useEffect(() => {
     if (preview) return;
     const timer = setInterval(() => {
@@ -39,6 +79,8 @@ export function Messages() {
   }, [preview, outgoing]);
   async function send() {
     if (!text.trim() || !person) return;
+    const time = Date.now();
+    const order = sequence.current++;
     setBusy(true);
     setError("");
     try {
@@ -51,8 +93,9 @@ export function Messages() {
           });
       setOutgoing((v) => [
         ...v,
-        { id: r.chatId, to: person.id, text: text.trim(), status: r.status },
+        { id: r.chatId, to: person.id, text: text.trim(), status: r.status, time, order },
       ]);
+      followLatest.current = true;
       setText("");
     } catch (e) {
       setError((e as Error).message);
@@ -169,7 +212,10 @@ export function Messages() {
           <div className="chat-date">
             {preview ? "TODAY, 09:41" : "LIVE CONVERSATION"}
           </div>
-          <div className="chat-scroll">
+          <div className="chat-scroll" ref={chatScroll} role="log" aria-label="Conversation messages" onScroll={event => {
+            const pane = event.currentTarget;
+            followLatest.current = pane.scrollHeight - pane.scrollTop - pane.clientHeight < 80;
+          }}>
             {preview && person?.id === "A" && (
               <>
                 <Message
@@ -196,21 +242,13 @@ export function Messages() {
                 />
               </>
             )}
-            {!preview &&
-              inbox
-                .filter((m) => m.from === person?.id)
-                .map((m) => (
-                  <Message key={m.chatId} text={m.text} meta={m.from} />
-                ))}
-            {outgoing
-              .filter((m) => m.to === person?.id)
-              .map((m) => (
+            {timeline.map((m) => (
                 <Message
-                  key={m.id}
-                  own
+                  key={`${m.own ? "sent" : "received"}/${m.id}`}
+                  own={m.own}
                   text={m.text}
-                  meta={m.status}
-                  waiting={m.status === "PENDING"}
+                  meta={m.meta}
+                  waiting={m.waiting}
                 />
               ))}
           </div>

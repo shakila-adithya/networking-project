@@ -4,6 +4,7 @@ import { usePathname } from "next/navigation";
 import { MeshProvider, useMesh, transportLabel } from "@/lib/mesh";
 import { Icon } from "./ui";
 import { ConnectionGlyph } from "./connection-glyph";
+import { ThemeToggle } from "./theme-toggle";
 export function Shell({ children }: { children: React.ReactNode }) {
   return (
     <MeshProvider>
@@ -75,7 +76,7 @@ function Chrome({ children }: { children: React.ReactNode }) {
             {preview ? "Use live network" : "View design preview"}
           </button>
         </nav>
-        <span className="header-spacer" aria-hidden="true" />
+        <ThemeToggle />
       </header>
       {!preview && connectionNotice === "starting" && <div className="connection-notice" role="status">
         <span className="connection-notice-icon" aria-hidden="true"><ConnectionGlyph kind="mesh" /></span>

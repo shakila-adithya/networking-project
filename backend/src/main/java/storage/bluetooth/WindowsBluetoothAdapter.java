@@ -50,8 +50,8 @@ public final class WindowsBluetoothAdapter implements LocalBluetooth {
             FIND_RADIO_CLOSE = h(bth, "BluetoothFindRadioClose", FunctionDescriptor.of(JAVA_INT, ADDRESS));
             GET_RADIO_INFO = h(bth, "BluetoothGetRadioInfo", FunctionDescriptor.of(JAVA_INT, ADDRESS, ADDRESS));
             IS_DISCOVERABLE = h(bth, "BluetoothIsDiscoverable", FunctionDescriptor.of(JAVA_INT, ADDRESS));
-            ENABLE_DISCOVERY = h(bth, "BluetoothEnableDiscovery", FunctionDescriptor.of(JAVA_INT, ADDRESS, JAVA_INT));
-            ENABLE_INCOMING = h(bth, "BluetoothEnableIncomingConnections", FunctionDescriptor.of(JAVA_INT, ADDRESS, JAVA_INT));
+            ENABLE_DISCOVERY = hWithError(bth, "BluetoothEnableDiscovery");
+            ENABLE_INCOMING = hWithError(bth, "BluetoothEnableIncomingConnections");
             IS_CONNECTABLE = h(bth, "BluetoothIsConnectable", FunctionDescriptor.of(JAVA_INT, ADDRESS));
             CLOSE_HANDLE = h(k32, "CloseHandle", FunctionDescriptor.of(JAVA_INT, ADDRESS));
             LOOKUP_BEGIN = h(ws2, "WSALookupServiceBeginW", FunctionDescriptor.of(JAVA_INT, ADDRESS, JAVA_INT, ADDRESS));
@@ -63,6 +63,10 @@ public final class WindowsBluetoothAdapter implements LocalBluetooth {
         static MethodHandle h(SymbolLookup lookup, String name, FunctionDescriptor descriptor) {
             return LINKER.downcallHandle(lookup.find(name).orElseThrow(
                     () -> new UnsatisfiedLinkError(name + " is missing")), descriptor);
+        }
+        static MethodHandle hWithError(SymbolLookup lookup, String name) {
+            return LINKER.downcallHandle(lookup.find(name).orElseThrow(),
+                    FunctionDescriptor.of(JAVA_INT, ADDRESS, JAVA_INT), Linker.Option.captureCallState("GetLastError"));
         }
     }
 
@@ -76,6 +80,39 @@ public final class WindowsBluetoothAdapter implements LocalBluetooth {
     private WindowsBluetoothService service;
     private String advertisedName = "";
     private volatile String scanError = "";
+    private final RadioState connectable = new ConnectableState();
+    private final RadioState discoverable = new DiscoverableState();
+
+    /** BOOL reports whether Windows changed a state; an already-correct state is also success. */
+    interface RadioState {
+        boolean get() throws Throwable;
+        int set(boolean enabled) throws Throwable;
+    }
+    static void ensureState(RadioState state, boolean enabled, String label) throws IOException {
+        try {
+            if (state.get() == enabled) return;
+            int error = state.set(enabled);
+            if (state.get() != enabled)
+                throw new IOException("Windows could not " + (enabled ? "enable " : "disable ") + label
+                        + (error == 0 ? "" : " (Windows error " + error + ")"));
+        } catch (IOException e) { throw e; }
+        catch (Throwable e) { throw new IOException("Could not update " + label + ": " + e, e); }
+    }
+    private int setRadioState(MethodHandle function, boolean enabled) throws Throwable {
+        try (Arena arena = Arena.ofConfined()) {
+            MemorySegment state = arena.allocate(Api.STATE);
+            int changed = (int) function.invokeExact(state, radio, enabled ? 1 : 0);
+            return changed == 0 ? (int) Api.LAST_ERROR.get(state, 0L) : 0;
+        }
+    }
+    private final class ConnectableState implements RadioState {
+        public boolean get() throws Throwable { return (int) Api.IS_CONNECTABLE.invokeExact(radio) != 0; }
+        public int set(boolean enabled) throws Throwable { return setRadioState(Api.ENABLE_INCOMING, enabled); }
+    }
+    private final class DiscoverableState implements RadioState {
+        public boolean get() throws Throwable { return (int) Api.IS_DISCOVERABLE.invokeExact(radio) != 0; }
+        public int set(boolean enabled) throws Throwable { return setRadioState(Api.ENABLE_DISCOVERY, enabled); }
+    }
 
     private WindowsBluetoothAdapter(MemorySegment radio, String address, String radioName, boolean wasDiscoverable,
                                     boolean wasConnectable, Path restoreFile) {
@@ -193,14 +230,13 @@ public final class WindowsBluetoothAdapter implements LocalBluetooth {
         if (!deviceId.matches("[A-Za-z0-9_-]{1,40}")) throw new IllegalArgumentException("invalid device id");
         String wanted = meshId == null ? Nearby.advertisedName(displayName, deviceId)
                 : Nearby.advertisedMeshName(displayName, deviceId, meshId);
-        if (advertising && wanted.equals(advertisedName)) return;
-        if (service != null) { service.close(); service = null; }
         try {
             advertising = true; // own partial visibility changes, including a failed enable or SDP call
             // Windows requires incoming connections enabled BEFORE enabling discovery.
-            if (((int) Api.ENABLE_INCOMING.invokeExact(radio, 1)) == 0
-                    || ((int) Api.ENABLE_DISCOVERY.invokeExact(radio, 1)) == 0)
-                throw new IOException("Windows refused to make Bluetooth discoverable/connectable");
+            ensureState(connectable, true, "Bluetooth incoming connections");
+            ensureState(discoverable, true, "Bluetooth discovery");
+            if (service != null && wanted.equals(advertisedName)) return;
+            if (service != null) { service.close(); service = null; }
             service = new WindowsBluetoothService(address,
                     Integer.getInteger("mesh.bluetooth.channel", BluetoothTransport.DEFAULT_CHANNEL), wanted);
             advertisedName = wanted;
@@ -221,13 +257,14 @@ public final class WindowsBluetoothAdapter implements LocalBluetooth {
             try { service.close(); service = null; } catch (IOException e) { failure = e; }
         }
         if (!advertising) { if (failure != null) throw failure; return; }
-        try {
-            int a = (int) Api.ENABLE_DISCOVERY.invokeExact(radio, wasDiscoverable ? 1 : 0);
-            int b = (int) Api.ENABLE_INCOMING.invokeExact(radio, wasConnectable ? 1 : 0);
-            if (a == 0 || b == 0) throw new IOException("Windows refused to restore Bluetooth visibility");
-        } catch (Throwable t) {
-            IOException restore = new IOException("could not restore Bluetooth visibility: " + t, t);
-            if (failure == null) failure = restore; else failure.addSuppressed(restore);
+        // Restore both settings even if one fails, using the order required by Windows.
+        RadioState[] states = wasDiscoverable ? new RadioState[]{connectable, discoverable} : new RadioState[]{discoverable, connectable};
+        boolean[] wanted = wasDiscoverable ? new boolean[]{wasConnectable, true} : new boolean[]{false, wasConnectable};
+        String[] labels = wasDiscoverable ? new String[]{"Bluetooth incoming connections", "Bluetooth discovery"}
+                : new String[]{"Bluetooth discovery", "Bluetooth incoming connections"};
+        for (int i = 0; i < states.length; i++) {
+            try { ensureState(states[i], wanted[i], labels[i]); }
+            catch (IOException restore) { if (failure == null) failure = restore; else failure.addSuppressed(restore); }
         }
         advertising = false;
         advertisedName = "";

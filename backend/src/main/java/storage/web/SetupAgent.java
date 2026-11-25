@@ -115,10 +115,20 @@ public final class SetupAgent implements AutoCloseable {
     }
     private Map<String, Object> visibilityStatus() {
         var d = publicDevice();
+        String currentError = visibilityError;
+        ManagedPeer current = node;
+        if (current != null) {
+            // The active runtime owns visibility now; do not keep displaying an idle-startup error.
+            Object bluetooth = current.deviceStatus().get("bluetooth");
+            if (bluetooth instanceof Map<?, ?> status) {
+                Object problem = status.get("error");
+                currentError = problem instanceof String message && !message.isBlank() ? "Bluetooth visibility failed: " + message : "";
+            }
+        }
         return Map.of("deviceId", d.deviceId(), "visible", d.visible(), "displayName", d.displayName(),
                 "phase", phase, "bluetoothAvailable", bluetoothDirectory.adapter() != null,
-                "bluetoothReason", bluetoothDirectory.reason(), "error", !visibilityError.isBlank() || bluetoothDirectory.adapter() == null
-                        ? visibilityError : bluetoothDirectory.adapter().discoveryLimitation());
+                "bluetoothReason", bluetoothDirectory.reason(), "error", !currentError.isBlank() || bluetoothDirectory.adapter() == null
+                        ? currentError : bluetoothDirectory.adapter().discoveryLimitation());
     }
     private void visibility(HttpExchange exchange) throws IOException {
         if (!localManagement(exchange)) { json(exchange, 403, Map.of("message", "Manage visibility on this device using localhost.")); return; }
